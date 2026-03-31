@@ -26,7 +26,7 @@ class MailflowClient
     public function identify(string $userId, array $attrs = [], bool $async = false): ?array
     {
         if ($async) {
-            Jobs\MailflowDispatchJob::dispatch('identify', $userId, $attrs);
+            $this->dispatchJob('identify', $userId, $attrs);
             return null;
         }
 
@@ -48,7 +48,7 @@ class MailflowClient
     public function track(string $userId, string $event, array $props = [], bool $async = false): ?array
     {
         if ($async) {
-            Jobs\MailflowDispatchJob::dispatch('track', $userId, ['event' => $event, 'properties' => $props]);
+            $this->dispatchJob('track', $userId, ['event' => $event, 'properties' => $props]);
             return null;
         }
 
@@ -71,7 +71,7 @@ class MailflowClient
     public function send(string $userId, string $templateSlug, array $data = [], bool $async = false): ?array
     {
         if ($async) {
-            Jobs\MailflowDispatchJob::dispatch('send', $userId, ['template' => $templateSlug, 'data' => $data]);
+            $this->dispatchJob('send', $userId, ['template' => $templateSlug, 'data' => $data]);
             return null;
         }
 
@@ -91,6 +91,24 @@ class MailflowClient
     public function eventStatus(int $eventId): ?array
     {
         return $this->request('GET', "/api/events/{$eventId}", []);
+    }
+
+    protected function dispatchJob(string $method, string $userId, array $payload): void
+    {
+        $job = new Jobs\MailflowDispatchJob($method, $userId, $payload);
+
+        $connection = config('mailflow.queue_connection');
+        $queue      = config('mailflow.queue_name');
+
+        if ($connection !== null) {
+            $job->onConnection($connection);
+        }
+
+        if ($queue !== null) {
+            $job->onQueue($queue);
+        }
+
+        dispatch($job);
     }
 
     protected function request(string $method, string $path, array $payload): ?array

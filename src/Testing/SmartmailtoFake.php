@@ -30,6 +30,14 @@ class SmartmailtoFake extends Smartmailto
         return null;
     }
 
+    /** @var array<string, mixed> */
+    public array $healthResponse = ['status' => 'ok'];
+
+    public function health(): ?array
+    {
+        return $this->healthResponse;
+    }
+
     /**
      * Cuerpos registrados por endpoint. `track` e `identify` incluyen los items de los lotes.
      *

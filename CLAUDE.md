@@ -6,13 +6,13 @@
 - Repositorio: agavesoft/notificabot-conocimiento
 - Ruta local: ~/workspaces/agavesoft/conocimiento/notificabot/
 
-Paquete publico `agavesoft/smartmailto` (Packagist): SDK de Laravel 11-13 para la API de ingesta de Smartmailto (`notificabot-lara-mailflow`). El contrato de ingesta vive en el repo de conocimiento (`features/2026-10-F003-sdk-ingesta-robusta/dimensiones/tecnica.md` e `integracion.md`); este README lo replica. Un cambio de contrato es un feature de notificabot que toca este repo y el servidor en el mismo ciclo (las pruebas `tests/Feature/ContractTest.php` aqui y `tests/Feature/F003/ContractTest.php` en el servidor son espejo).
+Paquete publico `agavesoft/smartmailto` (Packagist): SDK de Laravel 12-13 para la API de ingesta de Smartmailto (`notificabot-lara-mailflow`). El contrato de ingesta vive en el repo de conocimiento (`features/2026-10-F003-sdk-ingesta-robusta/dimensiones/tecnica.md` e `integracion.md`); este README lo replica. Un cambio de contrato es un feature de notificabot que toca este repo y el servidor en el mismo ciclo (las pruebas `tests/Feature/ContractTest.php` aqui y `tests/Feature/F003/ContractTest.php` en el servidor son espejo).
 
 ## Ramas y publicacion
 
 - `develop` (trabajo) y `main` (publicado). Ramas de trabajo → PR a `develop`.
 - Publicar: PR `develop → main` con merge commit y tag `vX.Y.Z` en `main`; Packagist se actualiza por webhook del repo.
-- Gate: `.github/workflows/tests.yml` (matriz Laravel 11/12/13 + pint).
+- Gate: `.github/workflows/tests.yml` (matriz Laravel 12/13 + pint).
 - Sin ambientes desplegables: no aplica `/agave-ci` de dev/pro.
 
 ## Captura automatica de conocimiento

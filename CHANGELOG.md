@@ -4,7 +4,7 @@
 
 Paquete renombrado: `agavesoft/mailflow` → `agavesoft/smartmailto` (namespace `Agavesoft\Smartmailto`).
 
-- Laravel 11, 12 y 13; PHP 8.2+.
+- Laravel 12 y 13; PHP 8.2+ (Laravel 11 ya no recibe parches de seguridad: Composer bloquea todas sus versiones).
 - Identidad con `Identity::user($id, $email)` / `Identity::guest($email)`: personas sin cuenta.
 - `eventId` obligatorio en `track` e `idempotencyKey` obligatoria en `send` (idempotencia de punta a punta).
 - `secrets`, `object` y `occurredAt` en `track`.

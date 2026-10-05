@@ -1,6 +1,6 @@
 # Smartmailto — SDK para Laravel
 
-`agavesoft/smartmailto` conecta una aplicacion Laravel (11, 12 o 13) con Smartmailto: identifica personas (con o sin cuenta), registra eventos idempotentes, carga el historico y manda correos transaccionales.
+`agavesoft/smartmailto` conecta una aplicacion Laravel (12 o 13) con Smartmailto: identifica personas (con o sin cuenta), registra eventos idempotentes, carga el historico y manda correos transaccionales.
 
 > Antes `agavesoft/mailflow` (v1). La v2 cambia la API publica; ver [Migrar desde v1](#migrar-desde-v1).
 

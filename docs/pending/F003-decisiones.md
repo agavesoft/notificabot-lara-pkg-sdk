@@ -19,3 +19,4 @@ autor: seoane81@gmail.com
 | S5 | 4xx → `fail()` sin reintento + `SmartmailtoDeliveryFailed`; items invalidos de un lote se reportan uno por uno | Un rechazo no se arregla reintentando; la app debe enterarse |
 | S6 | Sin dependencias de `illuminate/foundation` en el codigo (jobs y eventos sin traits de Foundation) | El paquete declara solo `illuminate/*` |
 | S7 | `Smartmailto::fake()` registra el cuerpo exacto que se mandaria y mantiene las validaciones | Las pruebas de la app cliente detectan un `eventId` faltante |
+| S8 | Soporte Laravel 12 y 13, no 11 (la definicion decia 11-13) | Todas las versiones de Laravel 11 tienen avisos de seguridad sin parche y Composer las bloquea (`policy.advisories.block`); FF usa 13 |

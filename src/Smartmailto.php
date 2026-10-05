@@ -2,10 +2,12 @@
 
 namespace Agavesoft\Smartmailto;
 
+use Agavesoft\Smartmailto\Exceptions\SmartmailtoException;
 use Agavesoft\Smartmailto\Jobs\DeliverToSmartmailto;
 use DateTimeInterface;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Queue\SyncQueue;
 use InvalidArgumentException;
 
 /**
@@ -151,8 +153,19 @@ class Smartmailto
 
         $job = (new DeliverToSmartmailto($endpoint, $body, $headers, $key))->afterCommit();
 
-        if ($connection = $this->config('queue_connection')) {
+        $connection = $this->config('queue_connection');
+        if ($connection) {
             $job->onConnection($connection);
+        }
+
+        // Con la cola `sync` no hay reintento posible (release() no reencola y una excepcion saldria del
+        // commit de la app): se entrega una vez y una falla se reporta con SmartmailtoDeliveryFailed.
+        if ($this->app->make('queue')->connection($connection ?: null) instanceof SyncQueue) {
+            $this->app->bound('db')
+                ? $this->app->make('db')->afterCommit(fn () => $this->deliverOnce($job))
+                : $this->deliverOnce($job);
+
+            return null;
         }
         if ($queue = $this->config('queue_name')) {
             $job->onQueue($queue);
@@ -161,6 +174,16 @@ class Smartmailto
         $this->app->make(Dispatcher::class)->dispatch($job);
 
         return null;
+    }
+
+    private function deliverOnce(DeliverToSmartmailto $job): void
+    {
+        try {
+            $response = $this->app->make(SmartmailtoClient::class)->post($job->endpoint, $job->body, $job->headers);
+            $job->reportBatchItems($response);
+        } catch (SmartmailtoException $e) {
+            $job->failed($e);
+        }
     }
 
     /** @return array{type: string, id: string}|null */

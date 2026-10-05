@@ -30,12 +30,30 @@ class SmartmailtoFake extends Smartmailto
         return null;
     }
 
-    /** @return list<array<string, mixed>> */
+    /**
+     * Cuerpos registrados por endpoint. `track` e `identify` incluyen los items de los lotes.
+     *
+     * @return list<array<string, mixed>>
+     */
     public function calls(?string $endpoint = null): array
     {
-        $calls = $endpoint === null ? $this->calls : array_values(array_filter($this->calls, fn ($c) => $c['endpoint'] === $endpoint));
+        $bodies = [];
 
-        return array_map(fn ($c) => $c['body'], $calls);
+        foreach ($this->calls as $call) {
+            if ($endpoint === null || $call['endpoint'] === $endpoint) {
+                $bodies[] = $call['body'];
+            }
+
+            if ($call['endpoint'] === 'batch' && in_array($endpoint, ['track', 'identify'], true)) {
+                foreach ($call['body']['items'] as $item) {
+                    if ($item['type'] === $endpoint) {
+                        $bodies[] = $item;
+                    }
+                }
+            }
+        }
+
+        return $bodies;
     }
 
     public function assertTracked(string $event, ?Closure $callback = null): void

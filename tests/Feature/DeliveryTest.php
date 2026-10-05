@@ -109,3 +109,38 @@ test('el fake registra las llamadas sin red', function () {
     $fake->assertNotTracked('orden_creada');
     Http::assertNothingSent();
 });
+
+test('un item con error del servidor reintenta el lote completo', function () {
+    Http::fake(['*' => Http::response(['results' => [
+        ['index' => 0, 'status' => 'accepted', 'id' => 1],
+        ['index' => 1, 'status' => 'error', 'error' => 'item_failed'],
+    ]], 207)]);
+
+    expect(fn () => runDelivery(new DeliverToSmartmailto('batch', ['items' => [['type' => 'track'], ['type' => 'track']]])))
+        ->toThrow(fn (SmartmailtoException $e) => expect($e->transient)->toBeTrue());
+});
+
+test('el job no limita excepciones: reintenta hasta retryUntil', function () {
+    $job = new DeliverToSmartmailto('track', []);
+
+    expect(property_exists($job, 'maxExceptions') ? $job->maxExceptions : null)->toBeNull()
+        ->and($job->retryUntil()->getTimestamp())->toBeGreaterThan(now()->addHours(23)->getTimestamp());
+});
+
+test('con cola sync una falla no se pierde: dispara SmartmailtoDeliveryFailed', function () {
+    config(['queue.default' => 'sync']);
+    Event::fake([SmartmailtoDeliveryFailed::class]);
+    Http::fake(['*' => Http::response([], 429, ['Retry-After' => '30'])]);
+
+    Smartmailto::track('x', Identity::guest('a@example.com'), eventId: 'ff:x:9');
+
+    Event::assertDispatched(SmartmailtoDeliveryFailed::class, fn ($e) => $e->key === 'ff:x:9' && $e->status === 429);
+});
+
+test('el fake ve los track enviados dentro de un lote', function () {
+    $fake = Smartmailto::fake();
+
+    Smartmailto::batch(backfill: true)->track('orden_pagada', Identity::guest('a@example.com'), eventId: 'ff:op:1')->dispatch();
+
+    $fake->assertTracked('orden_pagada');
+});

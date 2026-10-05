@@ -22,9 +22,8 @@ class DeliverToSmartmailto implements ShouldQueue
 {
     use InteractsWithQueue, Queueable;
 
-    public int $tries = 0; // sin tope por numero: manda retryUntil()
-
-    public int $maxExceptions = 20;
+    // Sin tope por numero de intentos ni de excepciones: manda retryUntil() (retry_hours).
+    public int $tries = 0;
 
     /**
      * @param  array<string, mixed>  $body
@@ -67,19 +66,39 @@ class DeliverToSmartmailto implements ShouldQueue
             throw $e;
         }
 
-        // Un lote se acepta aunque traiga items invalidos (207): cada uno se reporta, sin reintento.
-        if ($this->endpoint === 'batch') {
-            foreach ($response['results'] ?? [] as $result) {
-                if (($result['status'] ?? null) === 'invalid') {
-                    $item = $this->body['items'][$result['index'] ?? -1] ?? [];
-                    app('events')->dispatch(new SmartmailtoDeliveryFailed(
-                        endpoint: 'batch',
-                        key: $item['event_id'] ?? null,
-                        status: 422,
-                        error: 'Batch item rejected.',
-                        response: $result,
-                    ));
-                }
+        $this->reportBatchItems($response);
+    }
+
+    /**
+     * Un lote se acepta aunque traiga items invalidos (207): cada invalido se reporta, sin reintento.
+     * Un item con `error` (falla del servidor) lanza una excepcion transitoria para reintentar el lote
+     * completo: los ya aceptados vuelven como duplicados por su event_id.
+     *
+     * @param  array<string, mixed>  $response
+     */
+    public function reportBatchItems(array $response): void
+    {
+        if ($this->endpoint !== 'batch') {
+            return;
+        }
+
+        $results = $response['results'] ?? [];
+
+        $errors = array_filter($results, fn ($result) => ($result['status'] ?? null) === 'error');
+        if ($errors !== []) {
+            throw SmartmailtoException::transient(count($errors).' batch item(s) failed on the server.');
+        }
+
+        foreach ($results as $result) {
+            if (($result['status'] ?? null) === 'invalid') {
+                $item = $this->body['items'][$result['index'] ?? -1] ?? [];
+                app('events')->dispatch(new SmartmailtoDeliveryFailed(
+                    endpoint: 'batch',
+                    key: $item['event_id'] ?? null,
+                    status: 422,
+                    error: 'Batch item rejected.',
+                    response: $result,
+                ));
             }
         }
     }

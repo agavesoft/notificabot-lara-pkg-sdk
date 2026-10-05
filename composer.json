@@ -1,27 +1,50 @@
 {
-    "name": "agavesoft/mailflow",
-    "description": "Laravel SDK client for the Mailflow API",
+    "name": "agavesoft/smartmailto",
+    "description": "Laravel SDK for Smartmailto: identify contacts, track idempotent events and send transactional email.",
     "type": "library",
     "license": "MIT",
+    "keywords": ["laravel", "email", "automation", "smartmailto"],
     "require": {
-        "php": "^8.1",
-        "illuminate/support": "^10.0|^11.0|^12.0",
-        "illuminate/http": "^10.0|^11.0|^12.0",
-        "illuminate/queue": "^10.0|^11.0|^12.0"
+        "php": "^8.2",
+        "illuminate/bus": "^12.0|^13.0",
+        "illuminate/contracts": "^12.0|^13.0",
+        "illuminate/http": "^12.0|^13.0",
+        "illuminate/queue": "^12.0|^13.0",
+        "illuminate/support": "^12.0|^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^10.0|^11.0",
+        "pestphp/pest": "^3.0|^4.0|^5.0",
+        "laravel/pint": "^1.18"
     },
     "autoload": {
         "psr-4": {
-            "Agavesoft\\Mailflow\\": "src/"
+            "Agavesoft\\Smartmailto\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Agavesoft\\Smartmailto\\Tests\\": "tests/"
         }
     },
     "extra": {
         "laravel": {
             "providers": [
-                "Agavesoft\\Mailflow\\MailflowServiceProvider"
+                "Agavesoft\\Smartmailto\\SmartmailtoServiceProvider"
             ],
             "aliases": {
-                "Mailflow": "Agavesoft\\Mailflow\\MailflowFacade"
+                "Smartmailto": "Agavesoft\\Smartmailto\\Facades\\Smartmailto"
             }
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "lint": "pint --test"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
         }
     },
     "minimum-stability": "stable",

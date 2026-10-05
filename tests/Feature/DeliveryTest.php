@@ -144,3 +144,14 @@ test('el fake ve los track enviados dentro de un lote', function () {
 
     $fake->assertTracked('orden_pagada');
 });
+
+test('un envio vencido (410) no se reintenta y avisa para mandarlo directo', function () {
+    Event::fake([SmartmailtoDeliveryFailed::class]);
+    Http::fake(['*' => Http::response(['error' => 'expired'], 410)]);
+
+    $job = new DeliverToSmartmailto('send', ['template' => 'recibo'], key: 'ff:recibo:9');
+    runDelivery($job)->shouldHaveReceived('fail');
+    $job->failed(SmartmailtoException::rejected('expired', 410));
+
+    Event::assertDispatched(SmartmailtoDeliveryFailed::class, fn ($e) => $e->key === 'ff:recibo:9' && $e->status === 410);
+});

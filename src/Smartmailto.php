@@ -70,15 +70,23 @@ class Smartmailto
      *
      * @param  array<string, mixed>  $data
      */
-    public function send(string $template, Identity $identity, array $data = [], string $idempotencyKey = ''): ?array
+    public function send(string $template, Identity $identity, array $data = [], string $idempotencyKey = '', ?DateTimeInterface $sendBefore = null): ?array
     {
         if (trim($idempotencyKey) === '') {
             throw new InvalidArgumentException('Smartmailto::send() requires an idempotencyKey (e.g. "app:receipt:{order_id}").');
         }
 
+        // F-008: si no sale antes de sendBefore, Smartmailto no lo envia (410) y se dispara
+        // SmartmailtoDeliveryFailed: la app lo manda por su cuenta sin riesgo de duplicado.
         return $this->deliver(
             'send',
-            [...$identity->toArray(), 'template' => $template, 'data' => $data, 'idempotency_key' => $idempotencyKey],
+            array_filter([
+                ...$identity->toArray(),
+                'template' => $template,
+                'data' => $data,
+                'idempotency_key' => $idempotencyKey,
+                'send_before' => $sendBefore?->format(DATE_ATOM),
+            ], fn ($value) => $value !== null),
             ['Idempotency-Key' => $idempotencyKey],
             $idempotencyKey,
         );
@@ -91,6 +99,21 @@ class Smartmailto
     public function batch(bool $backfill = false): PendingBatch
     {
         return new PendingBatch($this, $backfill);
+    }
+
+    /**
+     * F-008: salud del proyecto en Smartmailto (sincrono). `status`: ok | degraded | down. Pensado para
+     * la bandera de emergencia de la app (mandar sus correos esenciales directo mientras no sea ok).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function health(): ?array
+    {
+        if (! $this->enabled()) {
+            return null;
+        }
+
+        return $this->app->make(SmartmailtoClient::class)->get('health');
     }
 
     /** Estado de un evento ya registrado (sincrono). */

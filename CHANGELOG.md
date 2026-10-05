@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.1.0 — 2026-10
+
+- `send(..., sendBefore:)`: si Smartmailto no lo envia antes, responde 410 y se dispara `SmartmailtoDeliveryFailed` (contrato de emergencia: la app lo manda directo sin duplicar).
+- `Smartmailto::health()`: `ok | degraded | down` del proyecto para la bandera de emergencia.
+
 ## v2.0.0 — 2026-10
 
 Paquete renombrado: `agavesoft/mailflow` → `agavesoft/smartmailto` (namespace `Agavesoft\Smartmailto`).

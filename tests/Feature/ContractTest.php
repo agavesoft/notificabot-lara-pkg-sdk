@@ -82,3 +82,18 @@ test('una identidad necesita id o correo', function () {
     expect(fn () => Identity::user(''))->toThrow(InvalidArgumentException::class)
         ->and(fn () => Identity::guest(' '))->toThrow(InvalidArgumentException::class);
 });
+
+test('send con sendBefore manda send_before (F-008)', function () {
+    Http::fake(['*' => Http::response(['id' => 5], 202)]);
+
+    Smartmailto::send('recibo', Identity::user(7, 'a@example.com'), [], idempotencyKey: 'ff:recibo:1',
+        sendBefore: Carbon::parse('2026-10-05T12:10:00-06:00'));
+
+    Http::assertSent(fn (Request $request) => $request['send_before'] === '2026-10-05T12:10:00-06:00');
+});
+
+test('health consulta la salud del proyecto (F-008)', function () {
+    Http::fake(['smartmailto.test/api/health' => Http::response(['status' => 'degraded'], 200)]);
+
+    expect(Smartmailto::health())->toBe(['status' => 'degraded']);
+});

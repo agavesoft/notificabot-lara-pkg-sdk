@@ -52,6 +52,18 @@ Smartmailto::send('recibo-compra', Identity::user($user->id, $user->email), [
 5. **`object`** (`['order', 100]`) identifica el objeto de negocio; Smartmailto lo usa para llevar una secuencia por orden.
 6. **Unir invitado y cuenta**: cuando la persona reclama su orden o se registra, manda un evento o `identify` con `Identity::user($id, $correoDeLaOrden)`. Si tu app borra el correo de la orden al reclamarla, leelo antes.
 
+### Correos esenciales y emergencia
+
+Para registro y recibo de compra (plantillas transaccionales en Smartmailto):
+
+```php
+Smartmailto::send('recibo-compra', Identity::user($user->id, $user->email), $data,
+    idempotencyKey: "ff:recibo:{$order->id}", sendBefore: now()->addMinutes(10));
+```
+
+- Si no sale antes de `sendBefore`, Smartmailto no lo envia y el SDK dispara `SmartmailtoDeliveryFailed` (`status` 410): manda ese correo por tu cuenta. Al recuperarse, Smartmailto nunca lo envia tarde.
+- `Smartmailto::health()` devuelve `status` (`ok`, `degraded`, `down`), el atraso de las colas y el estado del proveedor: consultalo en tu scheduler y, si no es `ok` por varios minutos, enciende tu bandera para mandar directo.
+
 ### Carga inicial
 
 ```php

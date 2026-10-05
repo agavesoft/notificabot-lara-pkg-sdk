@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.php diff=php
+*.md diff=markdown
+/tests export-ignore
+/.github export-ignore
+/phpunit.xml export-ignore

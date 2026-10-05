@@ -1,0 +1,21 @@
+---
+feature: F-003
+tipo: decisiones
+titulo: Decisiones del SDK v2
+fecha: 2026-10-05
+componente: notificabot-lara-pkg-sdk
+branch: feature/2026-10-NB-F003-sdk-ingesta-robusta
+autor: seoane81@gmail.com
+---
+
+# Decisiones — SDK v2
+
+| # | Decision | Por que |
+|---|---|---|
+| S1 | Paquete renombrado a `agavesoft/smartmailto` y repo a `notificabot-lara-pkg-sdk` (product engineer, 2026-10-05) | v2 rompe la API de todos modos; nombre comercial |
+| S2 | `eventId` e `idempotencyKey` obligatorios en el SDK (opcionales en el servidor por compatibilidad v1) | Sin ellos un reintento duplica; el servidor no puede detectarlo |
+| S3 | Encolado `afterCommit` por default | Los eventos de FF ocurren dentro de transacciones (timbrado, activacion) |
+| S4 | `tries = 0` + `retryUntil` 24 h + `maxExceptions` 20; 429 hace `release(Retry-After)` | Reintentar por tiempo, no por numero; respetar el limite del servidor |
+| S5 | 4xx → `fail()` sin reintento + `SmartmailtoDeliveryFailed`; items invalidos de un lote se reportan uno por uno | Un rechazo no se arregla reintentando; la app debe enterarse |
+| S6 | Sin dependencias de `illuminate/foundation` en el codigo (jobs y eventos sin traits de Foundation) | El paquete declara solo `illuminate/*` |
+| S7 | `Smartmailto::fake()` registra el cuerpo exacto que se mandaria y mantiene las validaciones | Las pruebas de la app cliente detectan un `eventId` faltante |

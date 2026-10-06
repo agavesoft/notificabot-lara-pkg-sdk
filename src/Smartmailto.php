@@ -116,6 +116,67 @@ class Smartmailto
         return $this->app->make(SmartmailtoClient::class)->get('health');
     }
 
+    /**
+     * F-006: datos que Smartmailto guarda de una persona (correo, atributos, eventos y envios).
+     * Sincrono; queda registrado en la bitacora de acceso del proyecto. null si no existe.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function contact(Identity $identity): ?array
+    {
+        if (! $this->enabled()) {
+            return null;
+        }
+
+        try {
+            return $this->app->make(SmartmailtoClient::class)->get('contacts?'.http_build_query($this->lookup($identity)));
+        } catch (SmartmailtoException $e) {
+            if ($e->status === 404) {
+                return null;
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * F-006: borrado ARCO (cancelacion) de una persona. Sincrono. Devuelve false si no existia.
+     * Smartmailto conserva solo la marca (hash) de no escribirle si se habia dado de baja.
+     */
+    public function forget(Identity $identity): bool
+    {
+        if (! $this->enabled()) {
+            return false;
+        }
+
+        try {
+            $this->app->make(SmartmailtoClient::class)->delete('contacts?'.http_build_query($this->lookup($identity)));
+
+            return true;
+        } catch (SmartmailtoException $e) {
+            if ($e->status === 404) {
+                return false;
+            }
+            throw $e;
+        }
+    }
+
+    /** F-006: el correo enviado, re-generado (ligas de un solo uso ocultas). */
+    public function renderedEmail(int $sendId): ?array
+    {
+        if (! $this->enabled()) {
+            return null;
+        }
+
+        return $this->app->make(SmartmailtoClient::class)->get("sends/{$sendId}/render");
+    }
+
+    /** @return array{user_id?: string, email?: string} */
+    private function lookup(Identity $identity): array
+    {
+        // Con id se busca por id (el correo de una cuenta puede no ser unico).
+        return $identity->userId !== null ? ['user_id' => $identity->userId] : ['email' => (string) $identity->email];
+    }
+
     /** Estado de un evento ya registrado (sincrono). */
     public function eventStatus(int $id): ?array
     {

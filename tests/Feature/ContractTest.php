@@ -97,3 +97,22 @@ test('health consulta la salud del proyecto (F-008)', function () {
 
     expect(Smartmailto::health())->toBe(['status' => 'degraded']);
 });
+
+test('contact consulta por id y forget borra por correo (F-006)', function () {
+    Http::fake([
+        'smartmailto.test/api/contacts?user_id=7' => Http::response(['id' => 1, 'email' => 'a@example.com'], 200),
+        'smartmailto.test/api/contacts?email=*' => Http::response(['erased' => true], 200),
+    ]);
+
+    expect(Smartmailto::contact(Identity::user(7, 'a@example.com')))->toBe(['id' => 1, 'email' => 'a@example.com'])
+        ->and(Smartmailto::forget(Identity::guest('a@example.com')))->toBeTrue();
+
+    Http::assertSent(fn (Request $request) => $request->method() === 'DELETE' && $request->url() === 'https://smartmailto.test/api/contacts?email=a%40example.com');
+});
+
+test('contact y forget de alguien que no existe', function () {
+    Http::fake(['*' => Http::response(['error' => 'contact_not_found'], 404)]);
+
+    expect(Smartmailto::contact(Identity::guest('x@example.com')))->toBeNull()
+        ->and(Smartmailto::forget(Identity::guest('x@example.com')))->toBeFalse();
+});

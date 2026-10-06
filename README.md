@@ -87,6 +87,18 @@ Volver a correr la carga es seguro: los `eventId` repetidos se descartan.
 - Un rechazo (422 por datos invalidos, 401 por token) no se reintenta.
 - En ambos casos, al rendirse se dispara `Agavesoft\Smartmailto\Events\SmartmailtoDeliveryFailed` (`endpoint`, `key` = event_id o idempotency key, `status`, `error`). Escuchalo para registrar o alertar. En un lote, cada item invalido dispara su propio evento.
 
+### Privacidad (consulta y borrado)
+
+Smartmailto guarda correos y atributos cifrados con una llave por proyecto. Para atender a una persona:
+
+```php
+Smartmailto::contact(Identity::user($user->id));        // correo, atributos, eventos y envios (o null)
+Smartmailto::renderedEmail($sendId);                     // el correo enviado, re-generado sin ligas de un solo uso
+Smartmailto::forget(Identity::guest('ana@example.com')); // borrado ARCO; true si existia
+```
+
+Cada consulta queda registrada en la bitacora de acceso del proyecto.
+
 ### Pruebas en tu app
 
 ```php

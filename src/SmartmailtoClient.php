@@ -40,6 +40,12 @@ class SmartmailtoClient
         return $this->request('get', $path);
     }
 
+    /** @return array<string, mixed> */
+    public function delete(string $path): array
+    {
+        return $this->request('delete', $path);
+    }
+
     /**
      * @param  array<string, string>  $headers
      * @return array<string, mixed>
@@ -58,7 +64,7 @@ class SmartmailtoClient
                 ->withHeaders(['User-Agent' => 'agavesoft-smartmailto-php/2', ...$headers])
                 ->acceptJson()
                 ->timeout($this->timeout)
-                ->{$method}($url, $method === 'get' ? null : $body);
+                ->{$method}($url, $method === 'post' ? $body : null);
         } catch (ConnectionException $e) {
             throw SmartmailtoException::transient('Could not reach Smartmailto: '.$e->getMessage(), previous: $e);
         }

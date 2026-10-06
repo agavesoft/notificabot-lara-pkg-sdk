@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.2.0 — 2026-10
+
+- F-006: `Smartmailto::contact(Identity)` (consulta de datos de una persona), `Smartmailto::forget(Identity)` (borrado ARCO) y `Smartmailto::renderedEmail($sendId)` (correo enviado re-generado). Sincronos; quedan en la bitacora de acceso del proyecto.
+
 ## v2.1.0 — 2026-10
 
 - `send(..., sendBefore:)`: si Smartmailto no lo envia antes, responde 410 y se dispara `SmartmailtoDeliveryFailed` (contrato de emergencia: la app lo manda directo sin duplicar).

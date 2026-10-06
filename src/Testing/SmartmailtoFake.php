@@ -2,6 +2,7 @@
 
 namespace Agavesoft\Smartmailto\Testing;
 
+use Agavesoft\Smartmailto\Identity;
 use Agavesoft\Smartmailto\Smartmailto;
 use Closure;
 use PHPUnit\Framework\Assert as PHPUnit;
@@ -36,6 +37,21 @@ class SmartmailtoFake extends Smartmailto
     public function health(): ?array
     {
         return $this->healthResponse;
+    }
+
+    /** @var list<Identity> */
+    public array $forgotten = [];
+
+    public function contact(Identity $identity): ?array
+    {
+        return null;
+    }
+
+    public function forget(Identity $identity): bool
+    {
+        $this->forgotten[] = $identity;
+
+        return true;
     }
 
     /**

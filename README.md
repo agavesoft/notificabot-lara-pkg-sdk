@@ -61,7 +61,9 @@ Smartmailto::send('recibo-compra', Identity::user($user->id, $user->email), $dat
     idempotencyKey: "ff:recibo:{$order->id}", sendBefore: now()->addMinutes(10));
 ```
 
-- Si no sale antes de `sendBefore`, Smartmailto no lo envia y el SDK dispara `SmartmailtoDeliveryFailed` (`status` 410): manda ese correo por tu cuenta. Al recuperarse, Smartmailto nunca lo envia tarde.
+- Si la peticion llega despues de `sendBefore` (Smartmailto caido o tu cola atrasada), Smartmailto responde 410 y el SDK dispara `SmartmailtoDeliveryFailed`: manda ese correo por tu cuenta.
+- Si Smartmailto ya lo habia aceptado (202) pero no pudo enviarlo antes de `sendBefore` (por ejemplo, su cola esta detenida), **el SDK no se entera**: Smartmailto avisa por el **webhook de fallas del proyecto** (`failure_webhook_url`, se configura en el panel) con `{"event": "send_expired", "idempotency_key": "...", "send_id": ...}`. Tu app debe recibir ese webhook y mandar directo el correo de esa `idempotency_key`. Es parte obligatoria del contrato de emergencia.
+- En ambos casos Smartmailto nunca lo envia tarde.
 - `Smartmailto::health()` devuelve `status` (`ok`, `degraded`, `down`), el atraso de las colas y el estado del proveedor: consultalo en tu scheduler y, si no es `ok` por varios minutos, enciende tu bandera para mandar directo.
 
 ### Carga inicial
@@ -104,7 +106,7 @@ Fuente de verdad: `notificabot-conocimiento/features/2026-10-F003-sdk-ingesta-ro
 | Evento | eventId | Identidad | object | properties | secrets |
 |---|---|---|---|---|---|
 | `orden_creada` | `ff:orden_creada:{order_id}` | guest(email) | order | timbres, total, paquete | checkout_url |
-| `orden_pagada` | `ff:orden_pagada:{order_id}` | guest(email) o user(id, email) | order | timbres, total, paid_at | activation_url, activation_expires_at (invitado) |
+| `orden_pagada` | `ff:orden_pagada:{order_id}` | guest(email) o user(id, email) | order | invitado (bool), timbres, total, paid_at | activation_url, activation_expires_at (invitado) |
 | `orden_reclamada` | `ff:orden_reclamada:{order_id}` | user(id, correo de la orden) | order | via | — |
 | `cuenta_creada` | `ff:cuenta_creada:{user_id}` | user(id, email) | — | name | — |
 | `sesion_iniciada` | `ff:sesion_iniciada:{user_id}:{fecha}` | user(id) | — | — | — |

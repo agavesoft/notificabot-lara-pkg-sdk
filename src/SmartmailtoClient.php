@@ -34,6 +34,15 @@ class SmartmailtoClient
         return $this->request('post', $path, $body, $headers);
     }
 
+    /**
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>
+     */
+    public function put(string $path, array $body): array
+    {
+        return $this->request('put', $path, $body);
+    }
+
     /** @return array<string, mixed> */
     public function get(string $path): array
     {
@@ -64,7 +73,7 @@ class SmartmailtoClient
                 ->withHeaders(['User-Agent' => 'agavesoft-smartmailto-php/2', ...$headers])
                 ->acceptJson()
                 ->timeout($this->timeout)
-                ->{$method}($url, $method === 'post' ? $body : null);
+                ->{$method}($url, in_array($method, ['post', 'put'], true) ? $body : null);
         } catch (ConnectionException $e) {
             throw SmartmailtoException::transient('Could not reach Smartmailto: '.$e->getMessage(), previous: $e);
         }

@@ -2,6 +2,8 @@
 
 namespace Agavesoft\Smartmailto;
 
+use Agavesoft\Smartmailto\Console\ProvisionCommand;
+use Agavesoft\Smartmailto\Http\Middleware\VerifySmartmailtoWebhook;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
 
@@ -26,10 +28,15 @@ class SmartmailtoServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // F-008 (B2): middleware opcional para la ruta del webhook de falla.
+        $this->callAfterResolving('router', fn ($router) => $router->aliasMiddleware('smartmailto.webhook', VerifySmartmailtoWebhook::class));
+
         if ($this->app->runningInConsole()) {
             $this->publishes([
                 __DIR__.'/../config/smartmailto.php' => $this->app->configPath('smartmailto.php'),
             ], 'smartmailto-config');
+
+            $this->commands([ProvisionCommand::class]);
         }
     }
 }

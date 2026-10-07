@@ -8,7 +8,12 @@ use Illuminate\Support\Facades\Facade;
 /**
  * @method static array|null identify(\Agavesoft\Smartmailto\Identity $identity, array $attributes = [])
  * @method static array|null track(string $event, \Agavesoft\Smartmailto\Identity $identity, array $properties = [], string $eventId = '', array $secrets = [], ?array $object = null, ?\DateTimeInterface $occurredAt = null)
- * @method static array|null send(string $template, \Agavesoft\Smartmailto\Identity $identity, array $data = [], string $idempotencyKey = '', ?\DateTimeInterface $sendBefore = null)
+ * @method static array|null send(string $template, \Agavesoft\Smartmailto\Identity $identity, array $data = [], string $idempotencyKey = '', ?\DateTimeInterface $sendBefore = null, array $attachments = [], array $cc = [], array $bcc = [], string|array|null $replyTo = null, array $to = [], string|array|null $from = null, array $secrets = [])
+ * @method static array|null templates()
+ * @method static array|null putTemplate(string $name, string $subject, string $body, ?string $layout = null, ?string $kind = null, ?string $displayName = null, ?string $description = null)
+ * @method static array|null putPartial(string $name, string $body, ?string $description = null)
+ * @method static array|null putWorkflow(string $name, string|array $definition, string $format = 'yaml')
+ * @method static bool verifyWebhook(\Illuminate\Http\Request $request, ?string $secret = null, int $toleranceSeconds = 300)
  * @method static array|null health()
  * @method static array|null contact(\Agavesoft\Smartmailto\Identity $identity)
  * @method static bool forget(\Agavesoft\Smartmailto\Identity $identity)

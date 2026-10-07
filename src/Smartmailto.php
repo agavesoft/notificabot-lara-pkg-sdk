@@ -7,6 +7,8 @@ use Agavesoft\Smartmailto\Jobs\DeliverToSmartmailto;
 use DateTimeInterface;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Queue\SyncQueue;
 use InvalidArgumentException;
 
@@ -23,6 +25,9 @@ use InvalidArgumentException;
 class Smartmailto
 {
     public const MAX_BATCH = 100;
+
+    /** F-008 (B3): maximo por lista de destinatarios adicionales (to, cc, bcc). */
+    public const MAX_RECIPIENTS = 10;
 
     public function __construct(private readonly Container $app) {}
 
@@ -68,16 +73,40 @@ class Smartmailto
     /**
      * Envio transaccional inmediato con una plantilla. Es idempotente por `idempotencyKey`.
      *
+     * F-008 (B3): `to`, `cc` y `bcc` son destinatarios adicionales (solo plantillas `transactional`, max 10
+     * por lista, no crean contactos). `replyTo` y `from` aceptan un correo o ['email' => ..., 'name' => ...]
+     * (`from` solo del dominio del proyecto). `secrets` son ligas de un solo uso (`{{secret:nombre}}`).
+     *
      * @param  array<string, mixed>  $data
+     * @param  list<Attachment|UploadedFile|string>  $attachments  Attachment, archivo subido o ruta
+     * @param  list<string>  $to
+     * @param  list<string>  $cc
+     * @param  list<string>  $bcc
+     * @param  string|array{email: string, name?: string|null}|null  $replyTo
+     * @param  string|array{email: string, name?: string|null}|null  $from
+     * @param  array<string, string>  $secrets
      */
-    public function send(string $template, Identity $identity, array $data = [], string $idempotencyKey = '', ?DateTimeInterface $sendBefore = null): ?array
-    {
+    public function send(
+        string $template,
+        Identity $identity,
+        array $data = [],
+        string $idempotencyKey = '',
+        ?DateTimeInterface $sendBefore = null,
+        array $attachments = [],
+        array $cc = [],
+        array $bcc = [],
+        string|array|null $replyTo = null,
+        array $to = [],
+        string|array|null $from = null,
+        array $secrets = [],
+    ): ?array {
         if (trim($idempotencyKey) === '') {
             throw new InvalidArgumentException('Smartmailto::send() requires an idempotencyKey (e.g. "app:receipt:{order_id}").');
         }
 
         // F-008: si no sale antes de sendBefore, Smartmailto no lo envia (410) y se dispara
         // SmartmailtoDeliveryFailed: la app lo manda por su cuenta sin riesgo de duplicado.
+        // Lo opcional vacio no viaja: un send() sin B3 manda exactamente el cuerpo de antes.
         return $this->deliver(
             'send',
             array_filter([
@@ -86,6 +115,13 @@ class Smartmailto
                 'data' => $data,
                 'idempotency_key' => $idempotencyKey,
                 'send_before' => $sendBefore?->format(DATE_ATOM),
+                'to' => $this->recipients('to', $to),
+                'cc' => $this->recipients('cc', $cc),
+                'bcc' => $this->recipients('bcc', $bcc),
+                'reply_to' => $this->address('replyTo', $replyTo),
+                'from' => $this->address('from', $from),
+                'attachments' => $this->attachments($attachments),
+                'secrets' => $secrets ?: null,
             ], fn ($value) => $value !== null),
             ['Idempotency-Key' => $idempotencyKey],
             $idempotencyKey,
@@ -168,6 +204,109 @@ class Smartmailto
         }
 
         return $this->app->make(SmartmailtoClient::class)->get("sends/{$sendId}/render");
+    }
+
+    /**
+     * F-008 (B3): plantillas del proyecto (sin cuerpos; `checksum` para comparar sin descargar).
+     * Sincrono. Requiere el aprovisionamiento habilitado en el proyecto (si no: 403).
+     *
+     * @return list<array<string, mixed>>|null
+     */
+    public function templates(): ?array
+    {
+        if (! $this->enabled()) {
+            return null;
+        }
+
+        return $this->app->make(SmartmailtoClient::class)->get('templates')['templates'] ?? [];
+    }
+
+    /**
+     * F-008 (B3): crea o actualiza una plantilla por nombre. Idempotente (`result`: created | updated |
+     * unchanged). Solo viaja lo que se pasa: sin `layout` el servidor conserva el actual y sin `kind` usa
+     * `marketing` al crear. Una plantilla nueva nace activa.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function putTemplate(
+        string $name,
+        string $subject,
+        string $body,
+        ?string $layout = null,
+        ?string $kind = null,
+        ?string $displayName = null,
+        ?string $description = null,
+    ): ?array {
+        return $this->provision('templates', $name, array_filter([
+            'subject' => $subject,
+            'body' => $body,
+            'layout' => $layout,
+            'kind' => $kind,
+            'display_name' => $displayName,
+            'description' => $description,
+        ], fn ($value) => $value !== null));
+    }
+
+    /**
+     * F-008 (B3): crea o actualiza un bloque reutilizable (`{{> nombre}}`). Aplica a todas las
+     * plantillas desde el siguiente envio.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function putPartial(string $name, string $body, ?string $description = null): ?array
+    {
+        return $this->provision('partials', $name, array_filter(['body' => $body, 'description' => $description], fn ($value) => $value !== null));
+    }
+
+    /**
+     * F-008 (B3): crea o actualiza un workflow. Nunca queda activo por API: se crea inactivo y si la
+     * definicion cambia se guarda inactivo (`requires_activation`); un admin lo activa en el panel.
+     *
+     * @param  string|array<string, mixed>  $definition  YAML/JSON en texto o la definicion como arreglo
+     * @return array<string, mixed>|null
+     */
+    public function putWorkflow(string $name, string|array $definition, string $format = 'yaml'): ?array
+    {
+        return $this->provision('workflows', $name, is_array($definition) ? ['definition' => $definition] : ['definition' => $definition, 'format' => $format]);
+    }
+
+    /**
+     * F-008 (B2): verifica el webhook de falla de Smartmailto (`send_expired`, `job_failed`, `test`).
+     * Firma `sha256=hmac(secret, "{timestamp}.{cuerpo crudo}")` comparada en tiempo constante y ventana
+     * contra replay sobre `X-Smartmailto-Timestamp` (en ambos sentidos).
+     *
+     * @param  string|null  $secret  default: `smartmailto.webhook_secret` (SMARTMAILTO_WEBHOOK_SECRET)
+     */
+    public function verifyWebhook(Request $request, ?string $secret = null, int $toleranceSeconds = 300): bool
+    {
+        $secret ??= (string) $this->config('webhook_secret');
+        $timestamp = (string) $request->header('X-Smartmailto-Timestamp', '');
+        $signature = (string) $request->header('X-Smartmailto-Signature', '');
+
+        if ($secret === '' || $signature === '' || ! ctype_digit($timestamp)) {
+            return false;
+        }
+
+        if (abs(now()->getTimestamp() - (int) $timestamp) > $toleranceSeconds) {
+            return false;
+        }
+
+        $expected = 'sha256='.hash_hmac('sha256', $timestamp.'.'.$request->getContent(), $secret);
+
+        return hash_equals($expected, $signature);
+    }
+
+    /**
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>|null
+     */
+    protected function provision(string $resource, string $name, array $body): ?array
+    {
+        if (! $this->enabled()) {
+            return null;
+        }
+
+        return $this->app->make(SmartmailtoClient::class)->put($resource.'/'.rawurlencode($name), $body);
     }
 
     /** @return array{user_id?: string, email?: string} */
@@ -268,6 +407,62 @@ class Smartmailto
         } catch (SmartmailtoException $e) {
             $job->failed($e);
         }
+    }
+
+    /** @return list<string>|null */
+    private function recipients(string $field, array $emails): ?array
+    {
+        $emails = array_values(array_filter(array_map(fn ($email) => trim((string) $email), $emails), fn ($email) => $email !== ''));
+        if (count($emails) > self::MAX_RECIPIENTS) {
+            throw new InvalidArgumentException("Smartmailto::send() {$field} may not have more than ".self::MAX_RECIPIENTS.' recipients.');
+        }
+
+        return $emails ?: null;
+    }
+
+    /** @return array{email: string, name?: string}|null */
+    private function address(string $field, string|array|null $address): ?array
+    {
+        if ($address === null || $address === '' || $address === []) {
+            return null;
+        }
+
+        $email = trim((string) (is_string($address) ? $address : ($address['email'] ?? '')));
+        if ($email === '') {
+            throw new InvalidArgumentException("Smartmailto::send() {$field} requires an email.");
+        }
+        $name = is_array($address) ? ($address['name'] ?? null) : null;
+
+        return $name !== null && $name !== '' ? ['email' => $email, 'name' => (string) $name] : ['email' => $email];
+    }
+
+    /**
+     * Valida los limites del servidor antes de encolar: un adjunto de mas falla aqui, no en un job
+     * horas despues.
+     *
+     * @param  list<Attachment|UploadedFile|string>  $attachments
+     * @return list<array{filename: string, content: string, content_type: string}>|null
+     */
+    private function attachments(array $attachments): ?array
+    {
+        if ($attachments === []) {
+            return null;
+        }
+
+        $maxFiles = (int) $this->config('attachments.max_files', 10);
+        if (count($attachments) > $maxFiles) {
+            throw new InvalidArgumentException("Smartmailto::send() accepts at most {$maxFiles} attachments.");
+        }
+
+        $attachments = array_map(fn ($attachment) => Attachment::from($attachment), array_values($attachments));
+
+        $maxBytes = (int) $this->config('attachments.max_bytes', 7 * 1024 * 1024);
+        $total = array_sum(array_map(fn (Attachment $attachment) => $attachment->size(), $attachments));
+        if ($total > $maxBytes) {
+            throw new InvalidArgumentException("Smartmailto::send() attachments total {$total} bytes, over the {$maxBytes} bytes limit.");
+        }
+
+        return array_map(fn (Attachment $attachment) => $attachment->toArray(), $attachments);
     }
 
     /** @return array{type: string, id: string}|null */

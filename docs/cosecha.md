@@ -9,6 +9,7 @@ Registro de conocimiento pendiente de sincronizar al repo de conocimiento.
 ### F-003 — SDK para Laravel 13 e ingesta robusta
 
 - `docs/pending/F003-decisiones.md`
+- `docs/pending/F003-cierre.md` — marcador de cierre del componente (2026-10-07)
 
 ## Hallazgos sin feature
 

@@ -11,6 +11,10 @@ Registro de conocimiento pendiente de sincronizar al repo de conocimiento.
 - `docs/pending/F003-decisiones.md`
 - `docs/pending/F003-cierre.md` — marcador de cierre del componente (2026-10-07)
 
+### F-006 — Privacidad de contactos
+
+- `docs/pending/F006-cierre.md` — marcador de cierre del componente (2026-10-07)
+
 ## Hallazgos sin feature
 
 <!-- Entradas creadas por /agave-capturar (sin F-XXX asociado) -->

@@ -55,6 +55,33 @@ class SmartmailtoFake extends Smartmailto
     }
 
     /**
+     * F-008 (B3): aprovisionamiento registrado sin red. `templates()` devuelve `$templatesResponse`.
+     *
+     * @var list<array{resource: string, name: string, body: array<string, mixed>}>
+     */
+    public array $provisioned = [];
+
+    /** @var list<array<string, mixed>> */
+    public array $templatesResponse = [];
+
+    public function templates(): ?array
+    {
+        return $this->templatesResponse;
+    }
+
+    public function renderedEmail(int $sendId): ?array
+    {
+        return null;
+    }
+
+    protected function provision(string $resource, string $name, array $body): ?array
+    {
+        $this->provisioned[] = ['resource' => $resource, 'name' => $name, 'body' => $body];
+
+        return ['result' => 'created', 'name' => $name];
+    }
+
+    /**
      * Cuerpos registrados por endpoint. `track` e `identify` incluyen los items de los lotes.
      *
      * @return list<array<string, mixed>>
@@ -102,6 +129,14 @@ class SmartmailtoFake extends Smartmailto
         $matches = array_filter($this->calls('send'), fn ($body) => $body['template'] === $template && ($callback === null || $callback($body)));
 
         PHPUnit::assertNotEmpty($matches, "The expected [{$template}] email was not sent.");
+    }
+
+    /** @param  string  $resource  templates | partials | workflows */
+    public function assertProvisioned(string $resource, string $name, ?Closure $callback = null): void
+    {
+        $matches = array_filter($this->provisioned, fn ($call) => $call['resource'] === $resource && $call['name'] === $name && ($callback === null || $callback($call['body'])));
+
+        PHPUnit::assertNotEmpty($matches, "The expected [{$resource}/{$name}] was not provisioned.");
     }
 
     public function assertNothingDelivered(): void

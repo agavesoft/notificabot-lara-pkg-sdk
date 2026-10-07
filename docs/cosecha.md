@@ -15,6 +15,12 @@ Registro de conocimiento pendiente de sincronizar al repo de conocimiento.
 
 - `docs/pending/F006-cierre.md` — marcador de cierre del componente (2026-10-07)
 
+### F-008 — Correos transaccionales de las apps cliente
+
+- `docs/pending/F008-decisiones.md` — envio completo para FF (B3), aprovisionamiento y webhook (2026-10-07)
+- `docs/pending/F008-edge-cases.md` (2026-10-07)
+- `docs/pending/F008-cierre.md` — marcador de cierre del componente (PR #3 + follow-up B3) (2026-10-07)
+
 ## Hallazgos sin feature
 
 <!-- Entradas creadas por /agave-capturar (sin F-XXX asociado) -->

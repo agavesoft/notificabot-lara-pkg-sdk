@@ -6,20 +6,7 @@ Registro de conocimiento pendiente de sincronizar al repo de conocimiento.
 
 <!-- Entradas ligadas a features: F-XXX -->
 
-### F-003 — SDK para Laravel 13 e ingesta robusta
-
-- `docs/pending/F003-decisiones.md`
-- `docs/pending/F003-cierre.md` — marcador de cierre del componente (2026-10-07)
-
-### F-006 — Privacidad de contactos
-
-- `docs/pending/F006-cierre.md` — marcador de cierre del componente (2026-10-07)
-
-### F-008 — Correos transaccionales de las apps cliente
-
-- `docs/pending/F008-decisiones.md` — envio completo para FF (B3), aprovisionamiento y webhook (2026-10-07)
-- `docs/pending/F008-edge-cases.md` (2026-10-07)
-- `docs/pending/F008-cierre.md` — marcador de cierre del componente (PR #3 + follow-up B3) (2026-10-07)
+<!-- Sin pendientes: F-003, F-006 y F-008 se cosecharon el 2026-10-07 (agave-sync, segunda pasada). -->
 
 ## Hallazgos sin feature
 
@@ -29,3 +16,6 @@ Registro de conocimiento pendiente de sincronizar al repo de conocimiento.
 
 | Fecha | Commit | Tema | Origen | Procesado por |
 |-------|--------|------|--------|---------------|
+| 2026-10-07 | 0e933f6 | F-003 cierre del SDK + decisiones S1-S11 → ADR-008; revision de la definicion (Laravel 12-13) → F-003 Terminada | F-003 | agave-sync |
+| 2026-10-07 | 0e933f6 | F-006 cierre del SDK → F-006 Terminada | F-006 | agave-sync |
+| 2026-10-07 | 0e933f6 | F-008 cierre del SDK (PR #3 + follow-up B3) + decisiones + edge-cases → ADR-010/ADR-011 → F-008 Terminada | F-008 | agave-sync |

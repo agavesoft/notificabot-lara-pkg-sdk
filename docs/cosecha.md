@@ -19,7 +19,7 @@ Registro de conocimiento pendiente de sincronizar al repo de conocimiento.
 
 - `docs/pending/F008-decisiones.md` — envio completo para FF (B3), aprovisionamiento y webhook (2026-10-07)
 - `docs/pending/F008-edge-cases.md` (2026-10-07)
-- `docs/pending/F008-progreso.md` — handoff; lo absorbe `/agave-cerrar` (2026-10-07)
+- `docs/pending/F008-cierre.md` — marcador de cierre del componente (PR #3 + follow-up B3) (2026-10-07)
 
 ## Hallazgos sin feature
 

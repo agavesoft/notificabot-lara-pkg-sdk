@@ -73,6 +73,18 @@ test('el middleware deja pasar lo firmado y rechaza lo demas con 401', function 
         ->assertStatus(401);
 });
 
+test('una ventana no numerica en el middleware usa la default en vez de 0 s', function () use ($body) {
+    config(['smartmailto.webhook_secret' => SECRET]);
+    Route::post('/smartmailto/webhook', fn () => 'ok')->middleware('smartmailto.webhook:10m');
+    $timestamp = now()->getTimestamp() - 60;
+    $headers = [
+        'X-Smartmailto-Timestamp' => (string) $timestamp,
+        'X-Smartmailto-Signature' => 'sha256='.hash_hmac('sha256', $timestamp.'.'.$body, SECRET),
+    ];
+
+    $this->call('POST', '/smartmailto/webhook', server: $this->transformHeadersToServerVars($headers), content: $body)->assertOk();
+});
+
 test('el middleware sin secreto configurado responde 500 para que Smartmailto reintente', function () use ($body) {
     config(['smartmailto.webhook_secret' => null]);
     Route::post('/smartmailto/webhook', fn () => 'ok')->middleware('smartmailto.webhook');

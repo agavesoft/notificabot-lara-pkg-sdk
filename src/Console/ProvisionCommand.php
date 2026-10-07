@@ -220,7 +220,8 @@ class ProvisionCommand extends Command
      */
     private function frontmatter(string $content, string $file, array $allowed): array
     {
-        if (! preg_match('/\A---\n(.*?)\n---(?:\n|\z)(.*)\z/s', $content, $match)) {
+        // Un archivo que empieza con `---` siempre se lee como frontmatter (tambien vacio: `---\n---`).
+        if (! preg_match('/\A---\n(?:(.*?)\n)?---(?:\n|\z)(.*)\z/s', $content, $match)) {
             return [[], trim($content)];
         }
 

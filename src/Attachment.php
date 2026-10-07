@@ -39,6 +39,7 @@ final class Attachment
         if (! is_file($path) || ! is_readable($path)) {
             throw new InvalidArgumentException("Smartmailto attachment not readable: {$path}");
         }
+        self::assertSize((int) filesize($path), $path);
 
         return self::fromData((string) file_get_contents($path), $filename ?? basename($path), $contentType);
     }
@@ -50,12 +51,20 @@ final class Attachment
             throw new InvalidArgumentException("Smartmailto attachment {$filename} is empty.");
         }
 
-        return new self(self::validFilename($filename), $contents, self::resolveType($filename, $contentType));
+        $filename = self::validFilename($filename);
+        $type = self::resolveType($filename, $contentType);
+        if (! self::matchesType($contents, strtolower(pathinfo($filename, PATHINFO_EXTENSION)))) {
+            throw new InvalidArgumentException("Smartmailto attachment {$filename} does not look like a .".pathinfo($filename, PATHINFO_EXTENSION).' file.');
+        }
+
+        return new self($filename, $contents, $type);
     }
 
     /** Desde un archivo subido. El tipo sale de la extension del nombre, no del que mando el navegador. */
     public static function fromUpload(UploadedFile $file, ?string $filename = null, ?string $contentType = null): self
     {
+        self::assertSize((int) $file->getSize(), $file->getClientOriginalName());
+
         return self::fromData((string) $file->get(), $filename ?? $file->getClientOriginalName(), $contentType);
     }
 
@@ -78,6 +87,29 @@ final class Attachment
     public function toArray(): array
     {
         return ['filename' => $this->filename, 'content' => base64_encode($this->contents), 'content_type' => $this->contentType];
+    }
+
+    /** Un archivo que solo ya rebasa el limite total no se carga en memoria. */
+    private static function assertSize(int $size, string $name): void
+    {
+        $max = (int) config('smartmailto.attachments.max_bytes', 7 * 1024 * 1024);
+        if ($size > $max) {
+            throw new InvalidArgumentException("Smartmailto attachment {$name} has {$size} bytes, over the {$max} bytes limit.");
+        }
+    }
+
+    /** Misma revision de firma que el servidor: un .pdf que no es PDF se rechaza aqui y no en el job. */
+    private static function matchesType(string $contents, string $extension): bool
+    {
+        return match ($extension) {
+            // La especificacion de PDF permite basura antes de la cabecera (hasta 1 KB).
+            'pdf' => str_contains(substr($contents, 0, 1024), '%PDF-'),
+            'zip' => str_starts_with($contents, "PK\x03\x04") || str_starts_with($contents, "PK\x05\x06"),
+            'png' => str_starts_with($contents, "\x89PNG\r\n\x1a\n"),
+            'jpg', 'jpeg' => str_starts_with($contents, "\xFF\xD8\xFF"),
+            // xml, csv, txt: texto, sin bytes nulos.
+            default => ! str_contains($contents, "\0"),
+        };
     }
 
     private static function validFilename(string $filename): string

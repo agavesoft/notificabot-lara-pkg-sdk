@@ -109,6 +109,14 @@ test('archivos invalidos fallan antes de llamar', function (array $files, string
     'json invalido' => [['workflows/a.json' => '{nope'], 'JSON'],
 ]);
 
+test('un frontmatter vacio no se sube como parte del cuerpo', function () {
+    Http::fake(['*' => Http::response(['result' => 'created'], 201)]);
+
+    $this->artisan('smartmailto:provision', ['path' => provisionDir(['partials/pie.md' => "---\n---\n<p>FF</p>\n"])])->assertSuccessful();
+
+    Http::assertSent(fn (Request $request) => $request->data() === ['body' => '<p>FF</p>']);
+});
+
 test('un directorio inexistente falla', function () {
     $this->artisan('smartmailto:provision', ['path' => '/no/existe'])->assertFailed();
 });

@@ -104,6 +104,11 @@ class Smartmailto
             throw new InvalidArgumentException('Smartmailto::send() requires an idempotencyKey (e.g. "app:receipt:{order_id}").');
         }
 
+        // Apagado no hace nada: ni lee ni codifica adjuntos.
+        if (! $this->enabled()) {
+            return null;
+        }
+
         // F-008: si no sale antes de sendBefore, Smartmailto no lo envia (410) y se dispara
         // SmartmailtoDeliveryFailed: la app lo manda por su cuenta sin riesgo de duplicado.
         // Lo opcional vacio no viaja: un send() sin B3 manda exactamente el cuerpo de antes.
@@ -412,7 +417,12 @@ class Smartmailto
     /** @return list<string>|null */
     private function recipients(string $field, array $emails): ?array
     {
-        $emails = array_values(array_filter(array_map(fn ($email) => trim((string) $email), $emails), fn ($email) => $email !== ''));
+        foreach ($emails as $email) {
+            if (! is_string($email)) {
+                throw new InvalidArgumentException("Smartmailto::send() {$field} must be a list of email strings.");
+            }
+        }
+        $emails = array_values(array_filter(array_map(trim(...), $emails), fn ($email) => $email !== ''));
         if (count($emails) > self::MAX_RECIPIENTS) {
             throw new InvalidArgumentException("Smartmailto::send() {$field} may not have more than ".self::MAX_RECIPIENTS.' recipients.');
         }

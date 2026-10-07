@@ -205,12 +205,33 @@ test('los adjuntos fuera del contrato se rechazan antes de salir (F-008 B3)', fu
         ->and(fn () => Attachment::fromData(PDF, 'a.pdf', 'text/plain'))->toThrow(InvalidArgumentException::class, 'does not match')
         ->and(fn () => Attachment::fromPath('/no/existe.pdf'))->toThrow(InvalidArgumentException::class, 'not readable')
         ->and(fn () => Smartmailto::send('r', Identity::guest('a@example.com'), idempotencyKey: 'k', cc: array_fill(0, 11, 'x@example.com')))
-        ->toThrow(InvalidArgumentException::class, 'cc');
+        ->toThrow(InvalidArgumentException::class, 'cc')
+        ->and(fn () => Smartmailto::send('r', Identity::guest('a@example.com'), idempotencyKey: 'k', cc: [['email' => 'x@example.com']]))
+        ->toThrow(InvalidArgumentException::class, 'list of email strings')
+        // Firma del archivo, igual que el servidor: una pagina de error con nombre .pdf no sale.
+        ->and(fn () => Attachment::fromData('<html>error</html>', 'factura.pdf'))->toThrow(InvalidArgumentException::class, 'does not look like')
+        ->and(fn () => Attachment::fromData("PK\x03\x04", 'a.zip'))->not->toThrow(InvalidArgumentException::class)
+        ->and(fn () => Attachment::fromData("a\0b", 'a.xml'))->toThrow(InvalidArgumentException::class, 'does not look like');
+
+    // Un archivo que solo ya rebasa el limite no se carga en memoria.
+    $big = sys_get_temp_dir().'/smartmailto-'.uniqid().'.txt';
+    file_put_contents($big, 'abc');
+    config(['smartmailto.attachments.max_bytes' => 2]);
+    expect(fn () => Attachment::fromPath($big))->toThrow(InvalidArgumentException::class, 'over the 2 bytes')
+        ->and(fn () => Attachment::fromUpload(UploadedFile::fake()->createWithContent('a.txt', 'abc')))->toThrow(InvalidArgumentException::class, 'over the 2 bytes');
 
     // El limite es configurable para seguir al del servidor.
     config(['smartmailto.attachments.max_bytes' => 10]);
     expect($send([Attachment::fromData(PDF, 'a.pdf')]))->toThrow(InvalidArgumentException::class, 'limit');
 
+    Http::assertNothingSent();
+});
+
+test('con enabled=false send no lee los adjuntos (F-008 B3)', function () {
+    config(['smartmailto.enabled' => false]);
+    Http::fake();
+
+    expect(Smartmailto::send('r', Identity::guest('a@example.com'), idempotencyKey: 'k', attachments: ['/no/existe.pdf']))->toBeNull();
     Http::assertNothingSent();
 });
 

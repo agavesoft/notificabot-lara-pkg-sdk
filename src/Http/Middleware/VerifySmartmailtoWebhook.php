@@ -31,7 +31,10 @@ class VerifySmartmailtoWebhook
             return new JsonResponse(['error' => 'webhook_secret_not_configured'], 500);
         }
 
-        if (! $this->smartmailto->verifyWebhook($request, $secret, (int) $toleranceSeconds)) {
+        // Un parametro no numerico (`:10m`) seria una ventana de 0 s que rechaza todo con 4xx definitivo.
+        $tolerance = ctype_digit($toleranceSeconds) && (int) $toleranceSeconds > 0 ? (int) $toleranceSeconds : 300;
+
+        if (! $this->smartmailto->verifyWebhook($request, $secret, $tolerance)) {
             return new JsonResponse(['error' => 'invalid_signature'], 401);
         }
 

@@ -15,7 +15,8 @@ autor: seoane81@gmail.com
 - [x] Comando `smartmailto:provision {path} {--dry-run}` (1c1bd35)
 - [x] `verifyWebhook()`, middleware `smartmailto.webhook`, config `webhook_secret` (1c1bd35)
 - [x] composer `branch-alias` `dev-develop` → `2.2.x-dev` (1c1bd35)
-- [x] Pruebas: contrato JSON exacto, compatibilidad, adjuntos y limites, provision dry-run y real, webhook (53 pruebas)
+- [x] Pruebas: contrato JSON exacto, compatibilidad, adjuntos y limites, provision dry-run y real, webhook (56 pruebas, 149 aserciones)
+- [x] `/code-review` (paso 12b): hallazgos aplicados salvo la guarda de payload de cola (ver decisiones 15)
 - [x] README y CHANGELOG (v2.2.0 sin publicar)
 
 ## Pendiente

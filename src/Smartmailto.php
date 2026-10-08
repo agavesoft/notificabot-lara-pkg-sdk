@@ -2,8 +2,10 @@
 
 namespace Agavesoft\Smartmailto;
 
+use Agavesoft\Smartmailto\Contracts\PullResolver;
 use Agavesoft\Smartmailto\Exceptions\SmartmailtoException;
 use Agavesoft\Smartmailto\Jobs\DeliverToSmartmailto;
+use Agavesoft\Smartmailto\Testing\PullTester;
 use DateTimeInterface;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Container\Container;
@@ -44,11 +46,41 @@ class Smartmailto
     /**
      * Crea o actualiza el contacto y sus atributos. Con user_id + email une al invitado con su cuenta.
      *
+     * F-011 (R-11): `updatedAt` es la hora del cambio en tu app. Si push y pull traen el mismo atributo,
+     * Smartmailto conserva el de la hora mas reciente; sin ella usa la hora de llegada.
+     *
      * @param  array<string, mixed>  $attributes
      */
-    public function identify(Identity $identity, array $attributes = []): ?array
+    public function identify(Identity $identity, array $attributes = [], ?DateTimeInterface $updatedAt = null): ?array
     {
-        return $this->deliver('identify', [...$identity->toArray(), 'attributes' => $attributes]);
+        return $this->deliver('identify', $this->identifyBody($identity, $attributes, $updatedAt));
+    }
+
+    /**
+     * @internal usado por PendingBatch
+     *
+     * @param  array<string, mixed>  $attributes
+     * @return array<string, mixed>
+     */
+    public function identifyBody(Identity $identity, array $attributes, ?DateTimeInterface $updatedAt): array
+    {
+        return array_filter([
+            ...$identity->toArray(),
+            'attributes' => $attributes,
+            'updated_at' => $updatedAt?->format(DATE_ATOM),
+        ], fn ($value) => $value !== null);
+    }
+
+    /**
+     * F-011: prueba tu PullResolver contra el contrato de pull sin red (en las pruebas de tu app). Prende
+     * el pull con un secreto de prueba, registra la ruta y devuelve un cliente que firma como Smartmailto.
+     *
+     * @param  PullResolver|class-string<PullResolver>|null  $resolver  default: el configurado
+     * @param  list<string>|null  $catalog  llaves de contacto permitidas (sin red); null = la config
+     */
+    public function fakePull(PullResolver|string|null $resolver = null, ?array $catalog = null): PullTester
+    {
+        return PullTester::install($this->app, $resolver, $catalog);
     }
 
     /**

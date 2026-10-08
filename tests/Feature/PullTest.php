@@ -66,7 +66,7 @@ test('con pull.enabled y resolver la ruta existe, con su middleware y throttle',
     $route = Route::getRoutes()->getByName('smartmailto.pull');
     expect($route->uri())->toBe('api/smartmailto/pull')
         ->and($route->methods())->toContain('POST')
-        ->and($route->gatherMiddleware())->toBe(['smartmailto.pull', 'throttle:120,1', 'app.switch'])
+        ->and($route->gatherMiddleware())->toBe(['throttle:120,1', 'smartmailto.pull', 'app.switch'])
         ->and(collect(Route::getRoutes()->getRoutes())->filter(fn ($r) => $r->getName() === 'smartmailto.pull'))->toHaveCount(1);
 });
 
@@ -283,6 +283,36 @@ test('un resolver que regresa en el tiempo falla en voz alta (500)', function ()
     $pull = Smartmailto::fakePull($resolver, catalog: []);
 
     expect(fn () => $pull->request(['op' => 'contacts']))->toThrow(RuntimeException::class, 'ordered');
+});
+
+test('hasMore true con una pagina vacia falla en voz alta en vez de terminar la corrida', function () {
+    $resolver = new class implements PullResolver
+    {
+        public function contact(Identity $identity, ?CarbonInterface $eventsSince): ?PullContact
+        {
+            return null;
+        }
+
+        public function contacts(?CarbonInterface $updatedSince, ?PullCursor $after, int $limit): PullPage
+        {
+            return new PullPage([], hasMore: true);
+        }
+    };
+    $this->withoutExceptionHandling();
+    $pull = Smartmailto::fakePull($resolver, catalog: []);
+
+    expect(fn () => $pull->request(['op' => 'contacts']))->toThrow(RuntimeException::class, 'cannot advance');
+});
+
+test('fakePull recorre cargas de mas de 120 paginas sin chocar con el throttle y no prende el push', function () {
+    config(['smartmailto.enabled' => false]);
+    foreach (range(100, 230) as $id) {
+        $this->resolver->rows[] = new PullContact(Identity::user($id), CarbonImmutable::parse('2026-10-06T10:00:00Z'), key: $id);
+    }
+    $pull = Smartmailto::fakePull($this->resolver, catalog: []);
+
+    expect($pull->assertPullContract(limit: 1))->toHaveCount(133)
+        ->and(config('smartmailto.enabled'))->toBeFalse();
 });
 
 test('fakePull sin resolver falla con un mensaje claro', function () {

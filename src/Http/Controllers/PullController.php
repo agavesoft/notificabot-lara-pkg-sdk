@@ -39,7 +39,7 @@ class PullController
     public function __invoke(Request $request, Container $app): Response|JsonResponse
     {
         // La ruta pudo quedar registrada (route:cache) aunque despues se apagara el pull o el resolver.
-        $resolver = config('smartmailto.enabled', true) && config('smartmailto.pull.enabled', false) ? PullRoute::resolver($app) : null;
+        $resolver = config('smartmailto.pull.enabled', false) ? PullRoute::resolver($app) : null;
         if ($resolver === null) {
             return new JsonResponse(['error' => 'not_found'], 404);
         }
@@ -122,6 +122,11 @@ class PullController
 
         $this->assertOrdered($contacts, $after);
 
+        // Sin contactos no hay desde donde seguir: un next_cursor null terminaria la corrida en silencio.
+        if ($page->hasMore === true && $contacts === []) {
+            throw new RuntimeException('Smartmailto PullResolver::contacts() returned hasMore: true with no contacts; the cursor cannot advance.');
+        }
+
         $next = $hasMore && $contacts !== [] ? PullCursor::after($contacts[array_key_last($contacts)]) : null;
 
         return [$contacts, $next, $page->deleted];
@@ -158,6 +163,9 @@ class PullController
         // desde el ultimo contacto que si cupo.
         $budget = max(1024, (int) config('smartmailto.pull.max_response_bytes', 5_000_000)) - 1024;
         $deletedJson = $this->json(array_map(fn (Identity $identity) => $identity->toArray(), $deleted));
+        if (strlen($deletedJson) > $budget / 2) {
+            throw new RuntimeException('The Smartmailto pull deleted list exceeds half of smartmailto.pull.max_response_bytes; return fewer deleted identities per page.');
+        }
         $used = strlen($deletedJson);
         $kept = 0;
         foreach ($encoded as $json) {

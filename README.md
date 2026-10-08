@@ -362,7 +362,8 @@ SMARTMAILTO_PULL_RESOLVER=App\Smartmailto\MiPullResolver   # o enlaza Contracts\
 
 - La ruta `POST {prefix}/smartmailto/pull` (prefijo `api` por default, nombre `smartmailto.pull`) **solo existe** con el pull prendido y un resolver: si no, es 404. Se registra al arrancar la app: con `php artisan route:cache` regenera la cache al cambiar esto.
 - **Middleware extra:** `smartmailto.pull.route.middleware`, por ejemplo un interruptor propio. Va fuera del grupo `web`, sin CSRF.
-- **Throttle propio:** `smartmailto.pull.route.throttle`, default `120,1`. Smartmailto manda a lo mas 60/min de corridas y 60/min de un contacto.
+- **Throttle propio:** `smartmailto.pull.route.throttle`, default `120,1`. Corre antes de la firma, asi que tambien cuenta las peticiones rechazadas. Smartmailto manda a lo mas 60/min de corridas y 60/min de un contacto.
+- **Interruptores independientes:** el pull no depende de `SMARTMAILTO_ENABLED`, que es el interruptor del push. Con el push apagado, el catalogo remoto no se puede leer y la ruta responde 503, salvo que fijes `smartmailto.pull.catalog`.
 
 **3. Pruebalo sin red** contra el contrato:
 
@@ -392,6 +393,9 @@ $pull->assertPullContract(limit: 2);         // recorre todas las paginas: orden
    - El SDK arma el cursor desde el ultimo contacto y lo firma con el secreto del pull.
    - Rotar el secreto invalida los cursores guardados: una corrida fallida tiene que empezar de cero.
    - Si `updatedAt` retrocede dentro de una pagina, la ruta responde 500 en vez de saltarse contactos.
+   - Si tu columna guarda fracciones de segundo (`timestamp(6)`), compara con `$after->updatedAt->format('Y-m-d H:i:s.u')`. El query builder formatea las fechas sin microsegundos y repetiria filas.
+   - `contacts()` no recibe el horizonte de historia. El SDK descarta los eventos viejos despues, pero si tienes mucha historia, limita tu consulta con `config('smartmailto.pull.history_months')`.
+   - `hasMore: true` con una pagina vacia responde 500: el cursor no tiene desde donde seguir.
 6. **Quien es contacto lo decides tu.** `contactSince` es tu regla; sin ella, Smartmailto usa la fecha en que lo conocio. No devuelvas destinatarios externos, por ejemplo receptores de un CFDI.
 7. **Bajas y borrados.**
    - `unsubscribed: true` llega como baja y el pull nunca la quita.

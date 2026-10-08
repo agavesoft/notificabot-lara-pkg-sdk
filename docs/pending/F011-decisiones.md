@@ -20,8 +20,7 @@ de `notificabot-lara-mailflow`); el contrato se tomo de `App\Services\Pull\PullS
 ## Ruta y registro
 
 - **S1. Registro en `booted()`.** Asi se ven los bindings de `Contracts\PullResolver` que la app haga en
-  sus providers. La ruta solo se registra con `smartmailto.enabled`, `smartmailto.pull.enabled` y un
-  resolver (`pull.resolver` que implemente la interfaz, o un binding). Si las rutas estan en cache
+  sus providers. La ruta solo se registra con `smartmailto.pull.enabled` y un resolver (ver S21) (`pull.resolver` que implemente la interfaz, o un binding). Si las rutas estan en cache
   (`routesAreCached()`) no se registra: la cache ya la tiene, o no. El controlador repite la revision
   y responde 404 si el pull se apago con la ruta ya registrada. `(respuesta pre-dada)`
 - **S2. `PullRoute::register()` es idempotente y se puede volver a llamar.** La usan `fakePull()` y las
@@ -101,3 +100,20 @@ de `notificabot-lara-mailflow`); el contrato se tomo de `App\Services\Pull\PullS
 - **S20. `fakePull()`** pasa por el kernel HTTP de la app con peticiones firmadas como el servidor y
   verifica la firma de cada respuesta. Con `catalog` no sale a la red; sin el, junto con
   `Smartmailto::fake()`, usa `variablesResponse`.
+
+## Ajustes del /code-review
+
+- **S21. El pull no depende de `smartmailto.enabled`** (interruptor del push): C-17 le da su propio
+  interruptor y asi `fakePull()` no prende el push de la prueba como efecto secundario. Con el push
+  apagado el catalogo remoto no se lee y la ruta responde 503 (salvo `pull.catalog` fijo).
+- **S22. Throttle antes de la firma:** las peticiones con firma invalida tambien consumen el cupo.
+- **S23. `fakePull()` usa una IP de prueba por peticion:** recorrer una carga de mas de 120 paginas no
+  choca con el throttle `120,1` de la ruta real.
+- **S24. `hasMore: true` con pagina vacia → 500** (el cursor no puede avanzar; un `next_cursor: null`
+  terminaria la corrida en silencio). Una lista `deleted` de mas de la mitad del presupuesto de bytes →
+  500 con mensaje propio.
+- **No aplicado (documentado en README):** el query builder formatea fechas sin microsegundos (columnas
+  `timestamp(6)` deben comparar con `format('Y-m-d H:i:s.u')`); `contacts()` no recibe el horizonte de
+  historia (la interfaz es la de `tecnica.md`; el resolver puede leer `pull.history_months`);
+  `identify(updatedAt)` usa `DATE_ATOM` con la zona de quien llama, igual que `occurred_at` (el servidor
+  la parsea); una cache caida responde 500 (transitorio, el servidor reintenta).

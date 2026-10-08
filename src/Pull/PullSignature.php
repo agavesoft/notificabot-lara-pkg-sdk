@@ -10,7 +10,8 @@ namespace Agavesoft\Smartmailto\Pull;
  *  - Respuesta: `sha256=hex(hmac_sha256(secret, "{timestamp}.{request_id}.{cuerpo}"))`, con el
  *    `X-Smartmailto-Request` de la peticion que contesta: una respuesta grabada no sirve para otra.
  *
- * Los vectores fijos de tests/Feature/PullContractTest.php son los mismos del servidor.
+ * Los vectores fijos del bloque F-011 de tests/Feature/ContractTest.php son los mismos del servidor
+ * (tests/Feature/F011/PullTest.php).
  */
 final class PullSignature
 {

@@ -42,7 +42,8 @@ class PullTester
         $config = $app->make('config');
         $secret = (string) $config->get('smartmailto.pull.secret') ?: self::SECRET;
 
-        $config->set(['smartmailto.enabled' => true, 'smartmailto.pull.enabled' => true, 'smartmailto.pull.secret' => $secret]);
+        // Solo el interruptor del pull: `smartmailto.enabled` (push) queda como lo tenga la prueba.
+        $config->set(['smartmailto.pull.enabled' => true, 'smartmailto.pull.secret' => $secret]);
         if ($catalog !== null) {
             $config->set('smartmailto.pull.catalog', array_values($catalog));
         }
@@ -147,7 +148,10 @@ class PullTester
         $requestId ??= (string) Str::uuid();
         $this->requests[] = json_decode($body, true);
 
+        // Una IP de prueba por peticion: recorrer una carga grande no debe chocar con el throttle de la ruta.
+        $n = count($this->requests);
         $request = Request::create('/'.PullRoute::uri(), 'POST', server: [
+            'REMOTE_ADDR' => '10.'.(($n >> 16) & 255).'.'.(($n >> 8) & 255).'.'.($n & 255),
             'CONTENT_TYPE' => 'application/json',
             'HTTP_ACCEPT' => 'application/json',
             'HTTP_USER_AGENT' => 'Smartmailto-Pull/1',

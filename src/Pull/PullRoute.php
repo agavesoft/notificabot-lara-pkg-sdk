@@ -8,9 +8,9 @@ use Illuminate\Contracts\Container\Container;
 use Illuminate\Routing\Router;
 
 /**
- * F-011: registro de `POST {prefix}/smartmailto/pull`. Solo existe con `smartmailto.enabled`,
- * `smartmailto.pull.enabled` y un resolver (`pull.resolver` o un binding de Contracts\PullResolver); si
- * no, la ruta no existe (404). Fuera del grupo `web` (sin CSRF).
+ * F-011: registro de `POST {prefix}/smartmailto/pull`. Solo existe con `smartmailto.pull.enabled` (el
+ * interruptor propio del pull, apagado por default) y un resolver (`pull.resolver` o un binding de
+ * Contracts\PullResolver); si no, la ruta no existe (404). Fuera del grupo `web` (sin CSRF).
  *
  * La condicion se evalua al arrancar la app: con `route:cache` queda fija hasta regenerar la cache.
  */
@@ -33,9 +33,10 @@ final class PullRoute
         }
 
         $throttle = (string) config('smartmailto.pull.route.throttle', '120,1');
+        // El throttle va antes de la firma: las peticiones con firma invalida tambien cuentan.
         $middleware = [
-            'smartmailto.pull',
             ...($throttle !== '' ? ["throttle:{$throttle}"] : []),
+            'smartmailto.pull',
             ...(array) config('smartmailto.pull.route.middleware', []),
         ];
 
@@ -70,7 +71,7 @@ final class PullRoute
 
     private static function shouldRegister(Container $app): bool
     {
-        if (! config('smartmailto.enabled', true) || ! config('smartmailto.pull.enabled', false)) {
+        if (! config('smartmailto.pull.enabled', false)) {
             return false;
         }
 

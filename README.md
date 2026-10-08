@@ -111,12 +111,16 @@ Smartmailto::send('restablecer-contrasena', Identity::user($user->id, $user->ema
 - **`replyTo` / `from`:** un correo o `['email' => ..., 'name' => ...]`. `from` solo del dominio del From del proyecto (422 `from_not_allowed`).
 - Contrato completo: `docs/api-envio-y-aprovisionamiento.md` del servidor (`notificabot-lara-mailflow`).
 
-### Plantillas como codigo (aprovisionamiento, F-008)
+### Plantillas como codigo (aprovisionamiento, F-008 y F-009)
 
-Un admin debe habilitar *Aprovisionamiento por API* en el proyecto (apagado: 403 `provisioning_disabled`). Cada `PUT` es idempotente: lo que no cambio responde `unchanged` y no crea version.
+Un admin debe habilitar *Aprovisionamiento por API* en el proyecto (apagado: 403 `provisioning_disabled`). Todo es idempotente: lo que no cambio responde `unchanged` y no crea version.
+
+> **v2.3 requiere un servidor con F-009** (`POST /api/provision`): contra un servidor anterior `smartmailto:provision` falla con 404 y no cambia nada. Los metodos `put*()` sueltos siguen funcionando contra ambos.
 
 ```text
 resources/smartmailto/
+├── variables/contact.yaml              # F-009: catalogo de variables (o .yml / .json)
+├── variables/eventos.yaml
 ├── partials/pie.html                   # {{> pie}}; frontmatter opcional: description
 ├── templates/recibo-compra.md          # frontmatter: subject (requerido), kind, layout, display_name, description
 └── workflows/checkout.yaml             # o .json
@@ -134,16 +138,110 @@ display_name: Recibo de compra
 ```
 
 ```bash
-php artisan smartmailto:provision resources/smartmailto --dry-run   # valida local, no llama
-php artisan smartmailto:provision resources/smartmailto             # bloques -> plantillas -> workflows
+php artisan smartmailto:provision resources/smartmailto --dry-run    # lee los archivos, no llama
+php artisan smartmailto:provision resources/smartmailto --validate   # valida contra Smartmailto sin guardar (CI)
+php artisan smartmailto:provision resources/smartmailto              # un solo paquete; lo nuevo queda en borrador
+php artisan smartmailto:provision resources/smartmailto --activate   # ademas activa plantillas y workflows
 ```
 
+- **Todo o nada (F-009, RN-16):** el comando arma **un solo paquete** (variables → bloques → plantillas → workflows → activaciones) y lo manda a `POST /api/provision`. Si cualquier pieza falla, Smartmailto no cambia nada, lo que estaba activo **sigue enviando** con su version anterior, y el comando imprime **todos** los items fallidos y sale con codigo 1. Correrlo en cada deploy es seguro.
+- **Borrador y activacion (RN-4):** sin `--activate`, lo nuevo queda `draft` y un workflow cuya definicion cambia queda inactivo. Con `--activate` se activan en la misma operacion, con las mismas reglas que el panel: cero referencias a variables inexistentes, y ninguna referencia **nueva** a una obsoleta. Un workflow revisa tambien todas sus plantillas, que deben venir activas o activarse en el mismo paquete.
+- **Avisos (`warnings`):** se imprimen (`aviso template recibo: unknown_variable contact:nombre en body`) y no hacen fallar. Codigos: `unknown_variable`, `obsolete_variable`, `secret_in_subject`, `unknown_event`, `missing_group_operator`, `sensitive_kept` y `fiscal_key`.
+- **`--validate`** corre el mismo paquete en `POST /api/validate` sin guardar nada. Sale con codigo 1 si no es valido. Pide el token y el aprovisionamiento habilitado, igual que el deploy. Con `--activate` valida tambien la activacion. Reemplaza cualquier copia local del parser de plantillas: la unica regla es la del servidor (RN-13).
 - El cuerpo va tal cual (metalenguaje de Smartmailto; **no se convierte Markdown**: `.md` solo es el formato del archivo). Frontmatter plano `llave: valor`. El nombre es el del archivo (`^[a-z0-9][a-z0-9_-]*$`).
-- Se detiene en el primer rechazo (lo siguiente puede depender de el) y sale con codigo 1. Correrlo en cada deploy es seguro.
-- **Los workflows nunca quedan activos por API**: se crean inactivos y, si su definicion cambia, quedan inactivos aunque estuvieran activos. El comando lo avisa; un admin los activa en el panel.
+- Los bloques se mandan en orden alfabetico de archivo, y el servidor los aplica en ese orden: un bloque que incluye a otro debe nombrarse despues que el incluido.
 - Sin `layout` en el frontmatter el servidor conserva el actual; sin `kind`, una plantilla nueva nace `marketing`.
 
-Desde codigo: `Smartmailto::putPartial($name, $body)`, `Smartmailto::putTemplate($name, $subject, $body, layout:, kind:, displayName:, description:)`, `Smartmailto::putWorkflow($name, $yamlOArreglo)` y `Smartmailto::templates()` (con `checksum` = sha256 de `json_encode([subject, body, layout, kind])`). Son sincronos y lanzan `SmartmailtoException` si el servidor rechaza.
+#### Catalogo de variables (F-009)
+
+Cada archivo de `variables/` es una **lista** de variables. El catalogo dice que datos existen. Smartmailto valida contra el las plantillas y los workflows: una referencia a una variable que no existe se guarda con aviso, pero no se puede activar.
+
+```yaml
+# variables/contact.yaml: atributos del contacto (los que mandas con identify)
+- scope: contact
+  key: plan
+  type: enum
+  allowed_values: [free, pro]
+  description: Plan contratado        # obligatoria: es la documentacion que leen personas y agentes
+  filterable: true                    # se puede buscar en Contactos (nunca si es sensible)
+- scope: contact
+  key: telefono_movil
+  type: string
+  description: Movil del contacto
+  sensitive: true                     # solo un admin lo ve; por API solo se enciende
+- scope: contact
+  key: ciudad
+  type: string
+  description: Ciudad
+  default: Mexico                     # respaldo si falta el dato y la plantilla no trae |default
+
+# variables/eventos.yaml: datos de evento ({{data:x}} y properties.x) y secretos ({{secret:x}})
+- scope: event
+  key: logo_url                       # sin `event`: comun (datos de send())
+  type: url
+  description: Logo de la app
+- scope: event
+  key: orden
+  event: orden_creada                 # dato del evento orden_creada
+  type: string
+  description: Folio de la orden
+  required: true                      # si el track no lo trae: 422 missing_event_data
+- scope: secret
+  key: checkout_url
+  event: orden_creada
+  type: url
+  description: Liga de pago de un solo uso
+```
+
+| Campo | Regla |
+|---|---|
+| `scope` | `contact` (atributo del contacto, persistente), `event` (dato por envio) o `secret` (dato de un solo uso; siempre sensible, nunca en el asunto) |
+| `key` | Inmutable, `^[a-z][a-z0-9_]{0,63}$`. Unica por seccion y evento. `contact:email` y `contact:external_id` son reservadas |
+| `event` | Solo en `event`/`secret`: el evento al que pertenece. Sin `event` es comun (`send()`) |
+| `type` | `string`, `integer`, `decimal`, `boolean`, `date`, `datetime`, `url`, `email` o `enum` (con `allowed_values`). No cambia mientras tenga usos (`type_locked`) |
+| `allowed_values` | Se pueden agregar siempre; quitar uno contra el que compara una condicion: 409 `allowed_value_in_use` |
+| `required` | Solo `event`/`secret`: se valida al recibir (422). En `contact` no existe (`required_not_allowed`): la obligatoriedad es **de cada plantilla** |
+| `default` | Respaldo del catalogo. Orden: valor del contacto o evento → `|default` de la plantilla → `default` del catalogo |
+| `filterable` | Solo `contact` y no sensible (`filterable_sensitive`) |
+| `sensitive` | Solo `contact` (un dato de evento sensible va como `secret`). Por API, SDK o `provision` **solo se enciende**: un `sensitive: false` sobre una sensible la conserva con el aviso `sensitive_kept` y no falla el deploy. Apagarla es exclusivo de un admin en el panel |
+| `label` | Etiqueta visible, editable (default: la clave) |
+
+Reglas que conviene saber al escribir plantillas:
+
+- **Una variable que la plantilla imprime sin `|default` es obligatoria para esa plantilla.** Si falta en un workflow, el envio queda en `datos incompletos` y se reintenta hasta 24 h; un `data:`/`secret:` faltante omite el paso de inmediato. En `send()` falla al momento con 422 `missing_variables`. Dentro de `{{#if contact:x}}` no es obligatoria.
+- Sin datos fiscales (RFC, folio fiscal, regimen, CFDI) en `contact` ni `event`: el folio fiscal va como `secret`. Una clave que lo parece trae el aviso `fiscal_key`.
+- Tope de 100 variables `contact` activas (`catalog_full`). Una variable en uso no se borra (409 `in_use` con la lista de usos): se marca **obsoleta**. Lo que ya la usa sigue enviando, pero nada nuevo se activa con ella.
+- **YAML:** escribe las fechas entre comillas (`default: '2026-01-01'`). Sin comillas YAML las lee como fecha y el comando las rechaza antes de llamar.
+- El SDK solo revisa que los archivos se lean: lista valida, `scope`, `key`, `event` y que no haya repetidas. Lo demas lo valida el servidor, igual para el panel, la API, el SDK y MCP.
+
+#### Desde codigo
+
+```php
+Smartmailto::putVariable('contact', 'plan', ['type' => 'enum', 'allowed_values' => ['free', 'pro'], 'description' => 'Plan']);
+Smartmailto::putVariable('event', 'orden', ['type' => 'string', 'description' => 'Folio'], event: 'orden_creada');
+Smartmailto::variables('event', 'orden_creada');          // catalogo (filtros opcionales)
+Smartmailto::variableUsages('contact', 'plan');           // donde se usa
+Smartmailto::obsoleteVariable('contact', 'plan');
+Smartmailto::deleteVariable('contact', 'plan');           // false si no existia; 409 in_use si tiene usos
+Smartmailto::activateTemplate('recibo-compra');
+Smartmailto::activateWorkflow('checkout');
+Smartmailto::provisionPackage(['variables' => [...], 'templates' => [...]], activate: true);   // todo o nada
+Smartmailto::validatePackage([...]);                      // { valid, errors, warnings, results }: revisa `valid`
+Smartmailto::schema();                                    // esquema para agentes (mismo que la ayuda del panel)
+```
+
+Tambien `Smartmailto::putPartial($name, $body)`, `Smartmailto::putTemplate($name, $subject, $body, layout:, kind:, displayName:, description:)`, `Smartmailto::putWorkflow($name, $yamlOArreglo)` y `Smartmailto::templates()` (con `checksum` = sha256 de `json_encode([subject, body, layout, kind])`). Una plantilla nueva queda `draft` y guardar un workflow nunca lo activa: usa `activate*()`. Las respuestas traen `warnings`. Son sincronos y lanzan `SmartmailtoException` si el servidor rechaza:
+
+```php
+try {
+    Smartmailto::provisionPackage($package, activate: true);
+} catch (SmartmailtoException $e) {
+    $e->error();      // provision_failed | invalid_references | in_use | type_locked | ...
+    $e->items();      // lo que fallo: [{ type, name, code, ref, location }]
+    $e->usages();     // donde se usa la variable (in_use, type_locked, allowed_value_in_use)
+    $e->warnings();
+}
+```
 
 ### Webhook de falla (F-008)
 
@@ -217,7 +315,12 @@ $fake->assertSent('recibo-compra');
 $fake->assertNotTracked('orden_creada');
 $fake->assertSent('cfdi-por-correo', fn ($body) => count($body['attachments']) === 2);
 $fake->assertProvisioned('templates', 'recibo-compra');
+$fake->assertPackageProvisioned(fn (array $package, bool $activate) => $activate);   // smartmailto:provision
+$fake->assertVariablePut('contact', 'plan');
+$fake->assertActivated('workflow', 'checkout');
 ```
+
+El fake no sale a la red. Sus respuestas se ajustan con `provisionResponse`, `validateResponse`, `variablesResponse` y `schemaResponse`.
 
 ## Contrato de eventos de Factura Facilita
 

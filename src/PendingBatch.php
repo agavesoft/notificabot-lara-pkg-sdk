@@ -18,9 +18,9 @@ class PendingBatch
     ) {}
 
     /** @param array<string, mixed> $attributes */
-    public function identify(Identity $identity, array $attributes = []): self
+    public function identify(Identity $identity, array $attributes = [], ?DateTimeInterface $updatedAt = null): self
     {
-        $this->items[] = ['type' => 'identify', ...$identity->toArray(), 'attributes' => $attributes];
+        $this->items[] = ['type' => 'identify', ...$this->smartmailto->identifyBody($identity, $attributes, $updatedAt)];
 
         return $this;
     }

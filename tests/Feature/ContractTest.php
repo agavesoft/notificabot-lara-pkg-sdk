@@ -7,6 +7,10 @@ use Agavesoft\Smartmailto\Attachment;
 use Agavesoft\Smartmailto\Exceptions\SmartmailtoException;
 use Agavesoft\Smartmailto\Facades\Smartmailto;
 use Agavesoft\Smartmailto\Identity;
+use Agavesoft\Smartmailto\Pull\PullContact;
+use Agavesoft\Smartmailto\Pull\PullEvent;
+use Agavesoft\Smartmailto\Pull\PullSignature;
+use Agavesoft\Smartmailto\Tests\Fixtures\InMemoryPullResolver;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
@@ -388,6 +392,60 @@ test('con enabled=false el catalogo no sale a la red (F-009)', function () {
         ->and(Smartmailto::schema())->toBeNull();
 
     Http::assertNothingSent();
+});
+
+// ─── F-011: contrato de pull v1 ─────────────────────────────────────────
+// Espejo de tests/Feature/F011/PullTest.php del servidor (App\Services\Pull\PullSignature y PullClient).
+
+test('las firmas del pull coinciden con los vectores fijos del servidor (F-011)', function () {
+    expect(PullSignature::request('pullsec_vector', 1700000000, '{"version":1,"op":"contacts"}'))
+        ->toBe('sha256=cb63e97e98d2264be129646d56d69a3cfac8f5e39d8ad573641c924123ba1839')
+        ->and(PullSignature::response('pullsec_vector', 1700000000, '7f1c1f0e-0000-4000-8000-000000000001', '{"version":1,"contacts":[]}'))
+        ->toBe('sha256=b7d202a022135daf05aa90304060d420c84efb668d639c227fcd30f72b924e83');
+});
+
+test('la ruta acepta la peticion exacta del servidor y contesta el cuerpo que el servidor procesa (F-011)', function () {
+    Carbon::setTestNow('2026-10-08 12:00:00');
+    $resolver = new InMemoryPullResolver;
+    $resolver->rows = [new PullContact(Identity::user(123, 'a@b.mx'), Carbon::parse('2026-10-07T21:10:00Z'),
+        contactSince: Carbon::parse('2024-03-01T10:00:00Z'),
+        attributes: ['last_purchase_at' => '2026-09-30', 'fuera_de_catalogo' => 1],
+        events: [new PullEvent('ff:orden_pagada:991', 'orden_pagada', Carbon::parse('2026-09-30T10:00:00Z'), ['total' => 100], ['order', 991])])];
+    $resolver->deleted = [Identity::user(77)];
+    config(['smartmailto.pull.secret' => 'pullsec_contrato']);
+    Smartmailto::fakePull($resolver, catalog: ['last_purchase_at']);
+
+    // Cuerpo y headers como los arma PullClient::call() (RunPullJob: op contacts, limit 200).
+    $body = '{"version":1,"op":"contacts","updated_since":null,"cursor":null,"limit":200,"include":["attributes","events"],"project_id":12}';
+    $timestamp = now()->getTimestamp();
+    $response = $this->call('POST', '/api/smartmailto/pull', server: [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_USER_AGENT' => 'Smartmailto-Pull/1',
+        'HTTP_X_SMARTMAILTO_TIMESTAMP' => (string) $timestamp,
+        'HTTP_X_SMARTMAILTO_REQUEST' => '7f1c1f0e-0000-4000-8000-000000000001',
+        'HTTP_X_SMARTMAILTO_SIGNATURE' => 'sha256='.hash_hmac('sha256', $timestamp.'.'.$body, 'pullsec_contrato'),
+    ], content: $body);
+
+    $raw = $response->getContent();
+    expect($response->status())->toBe(200)
+        ->and($raw)->toBe('{"version":1,"contacts":[{"user_id":"123","email":"a@b.mx","contact_since":"2024-03-01T10:00:00Z","updated_at":"2026-10-07T21:10:00Z","unsubscribed":false,"attributes":{"last_purchase_at":"2026-09-30"},"events":[{"event_id":"ff:orden_pagada:991","event":"orden_pagada","occurred_at":"2026-09-30T10:00:00Z","properties":{"total":100},"object":{"type":"order","id":"991"}}]}],"deleted":[{"user_id":"77"}],"next_cursor":null}')
+        // Verificacion del servidor: "{ts}.{request_id}.{cuerpo}" con el mismo secreto.
+        ->and($response->headers->get('X-Smartmailto-Signature'))
+        ->toBe('sha256='.hash_hmac('sha256', $response->headers->get('X-Smartmailto-Timestamp').'.7f1c1f0e-0000-4000-8000-000000000001.'.$raw, 'pullsec_contrato'));
+
+    Carbon::setTestNow();
+});
+
+test('identify manda updated_at (hora de cambio en la app) solo si se da (F-011 R-11)', function () {
+    Http::fake(['*' => Http::response(['id' => 1], 200)]);
+
+    Smartmailto::identify(Identity::user(7, 'a@example.com'), ['plan' => 'pro'], Carbon::parse('2026-10-07T21:10:00-06:00'));
+    Smartmailto::batch()->identify(Identity::guest('b@example.com'), [], Carbon::parse('2026-10-07T03:00:00Z'))->dispatch();
+
+    Http::assertSent(fn (Request $request) => str_ends_with($request->url(), '/api/identify')
+        && $request->data() === ['user_id' => '7', 'email' => 'a@example.com', 'attributes' => ['plan' => 'pro'], 'updated_at' => '2026-10-07T21:10:00-06:00']);
+    Http::assertSent(fn (Request $request) => str_ends_with($request->url(), '/api/batch')
+        && $request['items'][0] === ['type' => 'identify', 'email' => 'b@example.com', 'attributes' => [], 'updated_at' => '2026-10-07T03:00:00+00:00']);
 });
 
 test('el fake registra catalogo, paquetes y activaciones sin red (F-009)', function () {

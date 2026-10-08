@@ -51,4 +51,45 @@ return [
      * Lo usan Smartmailto::verifyWebhook() y el middleware `smartmailto.webhook`.
      */
     'webhook_secret' => env('SMARTMAILTO_WEBHOOK_SECRET'),
+
+    /*
+     * F-011: pull. Smartmailto le pide datos a tu app (carga inicial, reconciliacion tras caidas, datos
+     * faltantes al enviar) en `POST {route.prefix}/smartmailto/pull`. Apagado por default: la ruta solo
+     * existe con `enabled` y un resolver (clase que implementa Contracts\PullResolver). Ver README.
+     */
+    'pull' => [
+        'enabled' => (bool) env('SMARTMAILTO_PULL_ENABLED', false),
+
+        // Secreto propio del pull (`pullsec_...`, se muestra una vez en el panel). Firma peticiones y respuestas.
+        'secret' => env('SMARTMAILTO_PULL_SECRET'),
+
+        'resolver' => env('SMARTMAILTO_PULL_RESOLVER'),
+
+        // Meses de historia de eventos que se mandan; null = toda. Smartmailto descarta lo que este fuera
+        // de su retencion de eventos.
+        'history_months' => env('SMARTMAILTO_PULL_HISTORY_MONTHS') !== null && env('SMARTMAILTO_PULL_HISTORY_MONTHS') !== ''
+            ? (int) env('SMARTMAILTO_PULL_HISTORY_MONTHS')
+            : null,
+
+        // Llaves de atributos de contacto permitidas. null = el catalogo del proyecto en Smartmailto
+        // (variables de contacto de F-009), en cache `catalog_ttl` segundos.
+        'catalog' => null,
+        'catalog_ttl' => (int) env('SMARTMAILTO_PULL_CATALOG_TTL', 300),
+
+        // Contactos por pagina como maximo (Smartmailto pide 200) y tamano maximo de la respuesta.
+        'max_limit' => 500,
+        'max_response_bytes' => 5_000_000,
+
+        // Ventana de la firma (segundos) y cache para recordar los X-Smartmailto-Request ya vistos.
+        'tolerance' => 300,
+        'cache_store' => env('SMARTMAILTO_PULL_CACHE_STORE'),
+
+        'route' => [
+            'prefix' => env('SMARTMAILTO_PULL_ROUTE_PREFIX', 'api'),
+            'name' => 'smartmailto.pull',
+            'throttle' => '120,1',
+            // Middleware extra de tu app (por ejemplo un interruptor propio).
+            'middleware' => [],
+        ],
+    ],
 ];

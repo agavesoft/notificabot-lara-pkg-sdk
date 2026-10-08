@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.5.0 — sin publicar
+
+- F-010 (eventos garantizados), compatible hacia atras: el outbox viene **apagado** (`SMARTMAILTO_OUTBOX_ENABLED=false`) y sin el todo sigue igual. **Requiere un servidor con F-010** (acuse con llave, `GET /api/send/{key}`, `POST /api/send/external`, `POST /api/outbox/heartbeat`, `POST /api/contacts/link`).
+  - **Outbox transaccional:** primera migracion que publica el paquete (`--tag=smartmailto-migrations`): `smartmailto_outbox` y `smartmailto_outbox_alert_state`.
+    - Con `outbox.enabled`, `track`, `send`, `identify`, `link` y `reportExternalSend` escriben la fila en la transaccion de la app (conexion `outbox.connection`), con el payload cifrado con `APP_KEY`.
+    - La fila se cierra solo con el acuse de su llave.
+  - **Worker** `smartmailto:outbox:work` (`--once`, `--sleep`, `--max-time`):
+    - Reintentos con backoff de 30 s, 2 min, 10 min y despues cada hora, hasta 72 h (`failed`, `reason=gave_up`). 401/403 y la falta de configuracion se reintentan, nunca fallan la fila.
+    - Un `send` que llega a su `send_before` sin acuse (o recibe 410) queda `expired`. Antes de cerrarlo consulta `GET /api/send/{key}`: si ya salio, esta en cola o se descarto a proposito, queda `acked`.
+    - Filas colgadas en `sending` vuelven a `pending` a los 10 min.
+    - Aviso de vida `POST /api/outbox/heartbeat` cada 5 min.
+  - **Evento `SmartmailtoOutboxFailed`** (`outboxId`, `kind`, `key`, `reason`, `template`, `status`, `error`; sin datos personales): rechazo definitivo (`reason` = estado HTTP), `expired` o `gave_up`. `needsEmergencySend()` para los `send`.
+  - **`Smartmailto::reportExternalSend($key, $identity?, $template?, $sentAt?, $channel = 'ses_direct', $reason?)`:** reporta el envio de emergencia de la app.
+    - Con el outbox marca la fila `superseded` (nunca en vuelo: lanza `OutboxRowInFlight`) y escribe la fila `external_report` en la misma transaccion. Sin outbox lo encola a `POST /api/send/external`.
+  - **Alertas agrupadas por proyecto** (correo `alerts.mail_to` y Teams `alerts.teams_webhook_url`, tarjeta adaptable):
+    - primera a los 15 min, recordatorios a 1 h, 4 h, 12 h, 24 h y 48 h, un resumen a las 72 h y "recuperado";
+    - 422 de inmediato, agrupados por plantilla en ventanas de 15 min.
+  - Comandos `smartmailto:outbox:status`, `smartmailto:outbox:retry {id*} --key= --failed` y `smartmailto:outbox:prune [--contact=]` (retencion: acked 7 dias, cerradas 30 dias; ARCO por persona).
+  - Con el outbox, `send()` exige `sendBefore`; un `track` sin `occurredAt` guarda la hora del commit; un `identify` manda `updated_at` (hora de la llamada).
+  - `identify(..., consent: true)` (vuelta a consentir, D7).
+  - `Smartmailto::link($survivor, $absorbed, $reason, $linkId)` (`POST /api/contacts/link`).
+  - `Identity::external($email)` (`recipient_kind: external`) y `send(..., origin: Identity)`: destinatarios que no son contactos (R2).
+  - Adjuntos por URL: `Attachment::fromDisk($disk, $path, $filename?)` (URL firmada nueva en cada intento, 24 h) y `Attachment::fromUrl($url, $filename, $sha256)`. Con el outbox, un adjunto inline de mas de 1 MB se rechaza antes de guardar.
+  - `SmartmailtoFake`: `reportExternalSend()` registrado sin red; `assertLinked()` y `assertExternalSendReported()`.
+  - README: regla 4 por canal (R1) y guia de emergencia sin duplicados. Ya no recomienda mandar directo por `health()`.
+  - Dependencias declaradas: `illuminate/database`, `illuminate/encryption`, `illuminate/filesystem` e `illuminate/mail`. `composer.json`: `branch-alias` `dev-develop` → `2.5.x-dev`.
+
 ## v2.4.0 — sin publicar
 
 - F-011 (sincronizacion desde el proyecto: pull), compatible hacia atras. **Requiere un servidor con F-011**, y el pull se prende por proyecto en el panel. Con `SMARTMAILTO_PULL_ENABLED=false` (default) nada cambia: no se registra ninguna ruta.

@@ -24,7 +24,7 @@ Registro de conocimiento pendiente de sincronizar al repo de conocimiento.
 
 - `docs/pending/F010-decisiones.md` (2026-10-08) — contrato del servidor sobre el analisis (heartbeat POST, acuse por tipo, consulta por segmentos), clasificacion de respuestas, outbox (insertOrIgnore, llave de identify, UPDATE condicionado, send_before obligatorio), alertas agrupadas, adjuntos por URL, `Identity::external`, v2.5.0
 - `docs/pending/F010-edge-cases.md` (2026-10-08) — APP_KEY rotada, conexion equivocada, servidor sin F-010, fila en vuelo, worker muerto, `link` antes del contacto, `fromDisk` local
-- `docs/pending/F010-progreso.md` (2026-10-08) — progreso del componente SDK (lo absorbe el cierre)
+- `docs/pending/F010-cierre.md` (2026-10-08) — marcador de cierre del componente SDK (absorbe el progreso)
 
 ## Hallazgos sin feature
 

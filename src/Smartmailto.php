@@ -5,6 +5,7 @@ namespace Agavesoft\Smartmailto;
 use Agavesoft\Smartmailto\Contracts\PullResolver;
 use Agavesoft\Smartmailto\Exceptions\SmartmailtoException;
 use Agavesoft\Smartmailto\Jobs\DeliverToSmartmailto;
+use Agavesoft\Smartmailto\Outbox\Outbox;
 use Agavesoft\Smartmailto\Testing\PullTester;
 use DateTimeInterface;
 use Illuminate\Contracts\Bus\Dispatcher;
@@ -12,6 +13,7 @@ use Illuminate\Contracts\Container\Container;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Queue\SyncQueue;
+use Illuminate\Support\Carbon;
 use InvalidArgumentException;
 
 /**
@@ -23,6 +25,8 @@ use InvalidArgumentException;
  *  - `secrets` son valores de un solo uso (ligas de activacion o pago): Smartmailto los guarda
  *    cifrados y solo los usa dentro del correo.
  *  - Por default todo se encola despues del commit y se reintenta si Smartmailto no responde.
+ *  - F-010: con `outbox.enabled`, track/send/identify/link se guardan en la transaccion de tu app
+ *    (tabla smartmailto_outbox) y el worker los entrega hasta tener el acuse de Smartmailto.
  */
 class Smartmailto
 {
@@ -49,11 +53,15 @@ class Smartmailto
      * F-011 (R-11): `updatedAt` es la hora del cambio en tu app. Si push y pull traen el mismo atributo,
      * Smartmailto conserva el de la hora mas reciente; sin ella usa la hora de llegada.
      *
+     * F-010 (D7): `consent: true` registra que la persona volvio a aceptar correos (por ejemplo al marcar
+     * la casilla de tu formulario). Apaga el modo "solo transaccionales" de un contacto que se habia
+     * borrado por ARCO y deja la fecha (`consented_at`). Mandalo solo con un consentimiento explicito.
+     *
      * @param  array<string, mixed>  $attributes
      */
-    public function identify(Identity $identity, array $attributes = [], ?DateTimeInterface $updatedAt = null): ?array
+    public function identify(Identity $identity, array $attributes = [], ?DateTimeInterface $updatedAt = null, bool $consent = false): ?array
     {
-        return $this->deliver('identify', $this->identifyBody($identity, $attributes, $updatedAt));
+        return $this->deliver('identify', $this->identifyBody($identity, $attributes, $updatedAt, $consent));
     }
 
     /**
@@ -62,13 +70,78 @@ class Smartmailto
      * @param  array<string, mixed>  $attributes
      * @return array<string, mixed>
      */
-    public function identifyBody(Identity $identity, array $attributes, ?DateTimeInterface $updatedAt): array
+    public function identifyBody(Identity $identity, array $attributes, ?DateTimeInterface $updatedAt, bool $consent = false): array
     {
+        self::assertContact($identity, 'identify');
+
         return array_filter([
             ...$identity->toArray(),
             'attributes' => $attributes,
             'updated_at' => $updatedAt?->format(DATE_ATOM),
+            'consent' => $consent ?: null,
         ], fn ($value) => $value !== null);
+    }
+
+    /**
+     * F-010 (J8, regla 14): liga dos contactos como la misma persona; `absorbed` se fusiona en `survivor`
+     * (eventos, atributos y workflows en curso). Idempotente por `linkId`, que sale del hecho de negocio
+     * (`"ff:link:order:{id}"`). Smartmailto nunca crea contactos aqui: ambos deben existir. Dos cuentas con
+     * user_id no se ligan (409 both_have_user_id).
+     */
+    public function link(Identity $survivor, Identity $absorbed, string $reason, string $linkId): ?array
+    {
+        if (trim($linkId) === '') {
+            throw new InvalidArgumentException('Smartmailto::link() requires a linkId derived from the business fact (e.g. "app:link:order:{id}").');
+        }
+        self::assertContact($survivor, 'link');
+        self::assertContact($absorbed, 'link');
+
+        return $this->deliver('contacts/link', [
+            'survivor' => $survivor->toArray(),
+            'absorbed' => $absorbed->toArray(),
+            'reason' => $reason,
+            'link_id' => $linkId,
+        ], key: $linkId);
+    }
+
+    /**
+     * F-010 (regla 17.4): tu app mando por su canal de emergencia el correo de `$idempotencyKey` (al
+     * escuchar SmartmailtoOutboxFailed o el webhook `send_expired`). Smartmailto lo registra como "enviado
+     * por emergencia desde el proyecto" y ya no lo manda aunque le llegue despues.
+     *
+     * Con el outbox, la fila `send` pasa a superseded (lanza OutboxRowInFlight si esta en vuelo: reintenta)
+     * y el reporte viaja por el outbox con la misma garantia; la identidad y la plantilla salen de esa fila.
+     * Sin fila (o sin outbox) pasa `$identity` y `$template`.
+     *
+     * @param  string|null  $reason  motivo corto: el `reason` del evento ("422", "expired")
+     */
+    public function reportExternalSend(
+        string $idempotencyKey,
+        ?Identity $identity = null,
+        ?string $template = null,
+        ?DateTimeInterface $sentAt = null,
+        string $channel = 'ses_direct',
+        ?string $reason = null,
+    ): void {
+        if (trim($idempotencyKey) === '') {
+            throw new InvalidArgumentException('Smartmailto::reportExternalSend() requires the idempotencyKey of the send.');
+        }
+        if (! $this->enabled()) {
+            return;
+        }
+
+        $sentAt ??= now();
+        if ($this->outbox()->enabled()) {
+            $this->outbox()->reportExternalSend($idempotencyKey, $identity, $template, $sentAt, $channel, $reason);
+
+            return;
+        }
+
+        if ($identity === null || $template === null || $template === '') {
+            throw new InvalidArgumentException('Smartmailto::reportExternalSend() requires the identity and the template without the outbox.');
+        }
+
+        $this->deliver('send/external', Outbox::reportBody($idempotencyKey, Outbox::identityBody($identity), $template, $sentAt, $channel, $reason), key: $idempotencyKey);
     }
 
     /**
@@ -117,6 +190,11 @@ class Smartmailto
      * @param  string|array{email: string, name?: string|null}|null  $replyTo
      * @param  string|array{email: string, name?: string|null}|null  $from
      * @param  array<string, string>  $secrets
+     *
+     * F-010 (R2): con `Identity::external($correo)` el destinatario no se vuelve contacto (solo plantillas
+     * transaccionales); `origin` liga el envio al contacto de tu app que lo origino (p. ej. quien emitio
+     * el CFDI). Con el outbox, `sendBefore` es obligatorio: es lo que evita un duplicado con tu envio de
+     * emergencia (regla 17).
      */
     public function send(
         string $template,
@@ -131,14 +209,22 @@ class Smartmailto
         array $to = [],
         string|array|null $from = null,
         array $secrets = [],
+        ?Identity $origin = null,
     ): ?array {
         if (trim($idempotencyKey) === '') {
             throw new InvalidArgumentException('Smartmailto::send() requires an idempotencyKey (e.g. "app:receipt:{order_id}").');
+        }
+        if ($origin?->external) {
+            throw new InvalidArgumentException('Smartmailto::send() origin must be a contact of your app (Identity::user or guest), not an external recipient.');
         }
 
         // Apagado no hace nada: ni lee ni codifica adjuntos.
         if (! $this->enabled()) {
             return null;
+        }
+
+        if ($sendBefore === null && $this->outbox()->enabled()) {
+            throw new InvalidArgumentException('Smartmailto::send() requires sendBefore with the outbox enabled (e.g. now()->addMinutes(10) for a receipt).');
         }
 
         // F-008: si no sale antes de sendBefore, Smartmailto no lo envia (410) y se dispara
@@ -159,6 +245,8 @@ class Smartmailto
                 'from' => $this->address('from', $from),
                 'attachments' => $this->attachments($attachments),
                 'secrets' => $secrets ?: null,
+                'recipient_kind' => $identity->external ? 'external' : null,
+                'origin' => $origin?->toArray(),
             ], fn ($value) => $value !== null),
             ['Idempotency-Key' => $idempotencyKey],
             $idempotencyKey,
@@ -551,6 +639,7 @@ class Smartmailto
         if (trim($eventId) === '') {
             throw new InvalidArgumentException('Smartmailto::track() requires an eventId derived from the business fact (e.g. "app:order_paid:{order_id}").');
         }
+        self::assertContact($identity, 'track');
 
         return array_filter([
             ...$identity->toArray(),
@@ -570,6 +659,13 @@ class Smartmailto
     protected function deliver(string $endpoint, array $body, array $headers = [], ?string $key = null): ?array
     {
         if (! $this->enabled()) {
+            return null;
+        }
+
+        // F-010 (J1): con el outbox la llamada queda en la transaccion de tu app y la entrega el worker.
+        if ($this->outbox()->enabled() && ($kind = $this->outbox()->kindFor($endpoint)) !== null) {
+            $this->outbox()->write($kind, $key, $body, $body['template'] ?? null, isset($body['send_before']) ? Carbon::parse($body['send_before']) : null);
+
             return null;
         }
 
@@ -663,14 +759,41 @@ class Smartmailto
         }
 
         $attachments = array_map(fn ($attachment) => Attachment::from($attachment), array_values($attachments));
+        $inline = array_filter($attachments, fn (Attachment $attachment) => $attachment->isInline());
 
         $maxBytes = (int) $this->config('attachments.max_bytes', 7 * 1024 * 1024);
-        $total = array_sum(array_map(fn (Attachment $attachment) => $attachment->size(), $attachments));
+        $total = array_sum(array_map(fn (Attachment $attachment) => $attachment->size(), $inline));
         if ($total > $maxBytes) {
             throw new InvalidArgumentException("Smartmailto::send() attachments total {$total} bytes, over the {$maxBytes} bytes limit.");
         }
 
-        return array_map(fn (Attachment $attachment) => $attachment->toArray(), $attachments);
+        if (! $this->outbox()->enabled()) {
+            return array_map(fn (Attachment $attachment) => $attachment->toArray(), $attachments);
+        }
+
+        // F-010 (J12): el outbox no guarda base64 grande; un fromDisk se guarda como referencia y se firma
+        // en cada intento.
+        $inlineMax = (int) $this->config('attachments.inline_max_bytes', 1024 * 1024);
+        foreach ($inline as $attachment) {
+            if ($attachment->size() > $inlineMax) {
+                throw new InvalidArgumentException("Smartmailto::send() attachment {$attachment->filename} has {$attachment->size()} bytes, over the {$inlineMax} bytes inline limit of the outbox: use Attachment::fromDisk() or fromUrl().");
+            }
+        }
+
+        return array_map(fn (Attachment $attachment) => $attachment->toOutbox(), $attachments);
+    }
+
+    /** Un destinatario externo solo existe en send(): nunca es identidad de un evento ni de un contacto. */
+    private static function assertContact(Identity $identity, string $method): void
+    {
+        if ($identity->external) {
+            throw new InvalidArgumentException("Smartmailto::{$method}() does not accept Identity::external(): external recipients are never contacts.");
+        }
+    }
+
+    protected function outbox(): Outbox
+    {
+        return $this->app->make(Outbox::class);
     }
 
     /** @return array{type: string, id: string}|null */

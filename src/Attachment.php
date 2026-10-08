@@ -27,11 +27,81 @@ final class Attachment
         'txt' => ['text/plain'],
     ];
 
+    /**
+     * Inline (`contents`), por URL que da tu app (`url`) o por un archivo de un disco de tu app (`disk` +
+     * `path`, que se convierte en URL firmada temporal en cada intento).
+     */
     private function __construct(
         public readonly string $filename,
-        public readonly string $contents,
+        public readonly ?string $contents,
         public readonly string $contentType,
+        public readonly ?string $url = null,
+        public readonly ?string $sha256 = null,
+        public readonly ?string $disk = null,
+        public readonly ?string $path = null,
+        private readonly ?int $bytes = null,
     ) {}
+
+    /**
+     * F-010 (J12): adjunto grande por una URL https que Smartmailto descarga al aceptar el envio. `sha256`
+     * (64 hex) del archivo es obligatorio: Smartmailto lo verifica. La URL debe seguir viva mientras el
+     * envio se reintenta; con el outbox usa fromDisk() (URL nueva en cada intento).
+     */
+    public static function fromUrl(string $url, string $filename, string $sha256, ?string $contentType = null): self
+    {
+        if (! str_starts_with(strtolower($url), 'https://') || filter_var($url, FILTER_VALIDATE_URL) === false) {
+            throw new InvalidArgumentException('Smartmailto attachment url must be https.');
+        }
+        if (! preg_match('/^[a-f0-9]{64}$/i', $sha256)) {
+            throw new InvalidArgumentException('Smartmailto attachment sha256 must be 64 hex characters.');
+        }
+        $filename = self::validFilename($filename);
+
+        return new self($filename, null, self::resolveType($filename, $contentType), url: $url, sha256: strtolower($sha256));
+    }
+
+    /**
+     * F-010 (J12): adjunto grande desde un disco de tu app (S3 o uno con `temporaryUrl`). El SDK calcula
+     * el sha256 ahora y genera una URL firmada nueva en cada intento (`attachments.signed_url_ttl`, 24 h).
+     * El archivo debe seguir en el disco hasta que Smartmailto acuse el envio.
+     */
+    public static function fromDisk(string $disk, string $path, ?string $filename = null, ?string $contentType = null): self
+    {
+        $storage = app('filesystem')->disk($disk);
+        if (! $storage->exists($path)) {
+            throw new InvalidArgumentException("Smartmailto attachment not found on disk {$disk}: {$path}");
+        }
+
+        $size = (int) $storage->size($path);
+        $max = (int) config('smartmailto.attachments.url_max_bytes', 15 * 1024 * 1024);
+        if ($size > $max) {
+            throw new InvalidArgumentException("Smartmailto attachment {$path} has {$size} bytes, over the {$max} bytes limit for url attachments.");
+        }
+
+        $stream = $storage->readStream($path);
+        $hash = hash_init('sha256');
+        hash_update_stream($hash, $stream);
+        fclose($stream);
+
+        $filename = self::validFilename($filename ?? basename($path));
+
+        return new self($filename, null, self::resolveType($filename, $contentType), sha256: hash_final($hash), disk: $disk, path: $path, bytes: $size);
+    }
+
+    /** @internal el worker del outbox reconstruye el adjunto guardado (toOutbox) para cada intento. */
+    public static function fromOutbox(array $stored): ?self
+    {
+        if (! isset($stored['disk'], $stored['path'])) {
+            return null;
+        }
+
+        return new self($stored['filename'], null, $stored['content_type'], sha256: $stored['sha256'], disk: $stored['disk'], path: $stored['path']);
+    }
+
+    public function isInline(): bool
+    {
+        return $this->contents !== null;
+    }
 
     /** Desde un archivo en disco. `$filename` es el nombre que vera el destinatario (default: el del archivo). */
     public static function fromPath(string $path, ?string $filename = null, ?string $contentType = null): self
@@ -78,15 +148,47 @@ final class Attachment
         };
     }
 
+    /** Bytes del adjunto (0 si es una URL externa: el tamano lo revisa Smartmailto al descargar). */
     public function size(): int
     {
-        return strlen($this->contents);
+        return $this->contents !== null ? strlen($this->contents) : (int) $this->bytes;
     }
 
-    /** @return array{filename: string, content: string, content_type: string} */
+    /**
+     * Cuerpo del contrato: inline `{filename, content, content_type}` o por URL
+     * `{filename, content_type, url, sha256}` (fromDisk firma la URL en este momento).
+     *
+     * @return array<string, string>
+     */
     public function toArray(): array
     {
-        return ['filename' => $this->filename, 'content' => base64_encode($this->contents), 'content_type' => $this->contentType];
+        if ($this->contents !== null) {
+            return ['filename' => $this->filename, 'content' => base64_encode($this->contents), 'content_type' => $this->contentType];
+        }
+
+        return ['filename' => $this->filename, 'content_type' => $this->contentType, 'url' => $this->url ?? $this->signedUrl(), 'sha256' => (string) $this->sha256];
+    }
+
+    /**
+     * @internal lo que guarda el outbox: un fromDisk se guarda como referencia (nunca una URL firmada,
+     * que caducaria antes del ultimo reintento) y se firma en cada intento.
+     *
+     * @return array<string, string>
+     */
+    public function toOutbox(): array
+    {
+        if ($this->disk !== null) {
+            return ['filename' => $this->filename, 'content_type' => $this->contentType, 'disk' => $this->disk, 'path' => (string) $this->path, 'sha256' => (string) $this->sha256];
+        }
+
+        return $this->toArray();
+    }
+
+    private function signedUrl(): string
+    {
+        $ttl = (int) config('smartmailto.attachments.signed_url_ttl', 1440);
+
+        return app('filesystem')->disk((string) $this->disk)->temporaryUrl((string) $this->path, now()->addMinutes($ttl));
     }
 
     /** Un archivo que solo ya rebasa el limite total no se carga en memoria. */

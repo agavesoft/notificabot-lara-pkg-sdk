@@ -7,6 +7,8 @@ use Agavesoft\Smartmailto\Attachment;
 use Agavesoft\Smartmailto\Exceptions\SmartmailtoException;
 use Agavesoft\Smartmailto\Facades\Smartmailto;
 use Agavesoft\Smartmailto\Identity;
+use Agavesoft\Smartmailto\Outbox\Outbox;
+use Agavesoft\Smartmailto\Outbox\OutboxWorker;
 use Agavesoft\Smartmailto\Pull\PullContact;
 use Agavesoft\Smartmailto\Pull\PullEvent;
 use Agavesoft\Smartmailto\Pull\PullSignature;
@@ -464,4 +466,103 @@ test('el fake registra catalogo, paquetes y activaciones sin red (F-009)', funct
     expect(Smartmailto::variables('contact'))->toBe([['scope' => 'contact', 'key' => 'plan']])
         ->and($fake->packages)->toHaveCount(2);
     Http::assertNothingSent();
+});
+
+// ─── F-010: eventos garantizados ────────────────────────────────────────
+// Espejo de tests/Feature/F010 del servidor y de docs/api-envio-y-aprovisionamiento.md §2b
+// (consulta, reporte, heartbeat) de notificabot-lara-mailflow.
+
+test('identify con consent manda consent: true solo si se da (F-010 D7)', function () {
+    Http::fake(['*' => Http::response(['id' => 1], 200)]);
+
+    Smartmailto::identify(Identity::user(7, 'a@example.com'), [], consent: true);
+    Smartmailto::identify(Identity::user(8, 'b@example.com'));
+
+    Http::assertSent(fn (Request $request) => $request->data() === ['user_id' => '7', 'email' => 'a@example.com', 'attributes' => [], 'consent' => true]);
+    Http::assertSent(fn (Request $request) => $request->data() === ['user_id' => '8', 'email' => 'b@example.com', 'attributes' => []]);
+});
+
+test('link manda POST /api/contacts/link con survivor, absorbed, reason y link_id (F-010 J8)', function () {
+    Http::fake(['smartmailto.test/api/contacts/link' => Http::response(['link_id' => 'ff:link:order:555', 'duplicate' => false, 'contact' => ['id' => 1, 'user_id' => '7']], 200)]);
+
+    expect(Smartmailto::link(Identity::user(7), Identity::guest('compra@x.com'), 'timbres-en-otra-cuenta', 'ff:link:order:555'))
+        ->toBe(['link_id' => 'ff:link:order:555', 'duplicate' => false, 'contact' => ['id' => 1, 'user_id' => '7']]);
+
+    Http::assertSent(fn (Request $request) => $request->url() === 'https://smartmailto.test/api/contacts/link' && $request->data() === [
+        'survivor' => ['user_id' => '7'],
+        'absorbed' => ['email' => 'compra@x.com'],
+        'reason' => 'timbres-en-otra-cuenta',
+        'link_id' => 'ff:link:order:555',
+    ]);
+    expect(fn () => Smartmailto::link(Identity::user(7), Identity::guest('a@x.com'), 'x', ' '))->toThrow(InvalidArgumentException::class, 'linkId');
+});
+
+test('send a un destinatario externo manda recipient_kind y origin (F-010 R2)', function () {
+    Http::fake(['*' => Http::response(['ack' => true, 'idempotency_key' => 'ff:cfdi:9', 'id' => 5, 'duplicate' => false], 202)]);
+
+    Smartmailto::send('cfdi-documentos', Identity::external('receptor@cliente.mx'), ['folio' => 'A-9'], 'ff:cfdi:9', origin: Identity::user(7));
+
+    Http::assertSent(fn (Request $request) => $request->data() === [
+        'email' => 'receptor@cliente.mx',
+        'template' => 'cfdi-documentos',
+        'data' => ['folio' => 'A-9'],
+        'idempotency_key' => 'ff:cfdi:9',
+        'recipient_kind' => 'external',
+        'origin' => ['user_id' => '7'],
+    ]);
+});
+
+test('un destinatario externo nunca es identidad de track, identify ni link (F-010 R2)', function () {
+    Http::fake();
+    $external = Identity::external('receptor@cliente.mx');
+
+    expect(fn () => Smartmailto::track('x', $external, eventId: 'k'))->toThrow(InvalidArgumentException::class, 'external')
+        ->and(fn () => Smartmailto::identify($external))->toThrow(InvalidArgumentException::class, 'external')
+        ->and(fn () => Smartmailto::link(Identity::user(1), $external, 'x', 'k'))->toThrow(InvalidArgumentException::class, 'external')
+        ->and(fn () => Smartmailto::send('x', Identity::user(1), [], 'k', origin: $external))->toThrow(InvalidArgumentException::class, 'origin')
+        ->and(fn () => Identity::external(' '))->toThrow(InvalidArgumentException::class);
+    Http::assertNothingSent();
+});
+
+test('adjunto por URL: {filename, content_type, url, sha256} sin content (F-010 J12)', function () {
+    Http::fake(['*' => Http::response(['id' => 5], 202)]);
+    $sha = hash('sha256', PDF);
+
+    Smartmailto::send('cfdi', Identity::user(7), [], 'ff:cfdi:1', attachments: [Attachment::fromUrl('https://files.ff.mx/a.pdf?sig=x', 'RFC_UUID.pdf', strtoupper($sha))]);
+
+    Http::assertSent(fn (Request $request) => $request['attachments'] === [
+        ['filename' => 'RFC_UUID.pdf', 'content_type' => 'application/pdf', 'url' => 'https://files.ff.mx/a.pdf?sig=x', 'sha256' => $sha],
+    ]);
+    expect(fn () => Attachment::fromUrl('http://files.ff.mx/a.pdf', 'a.pdf', $sha))->toThrow(InvalidArgumentException::class, 'https')
+        ->and(fn () => Attachment::fromUrl('https://files.ff.mx/a.pdf', 'a.pdf', 'abc'))->toThrow(InvalidArgumentException::class, 'sha256');
+});
+
+test('reportExternalSend sin outbox manda POST /api/send/external con el cuerpo del contrato (F-010 regla 17.4)', function () {
+    Http::fake(['smartmailto.test/api/send/external' => Http::response(['ack' => true, 'idempotency_key' => 'ff:recibo:555', 'received_at' => '2026-10-08T12:10:00Z', 'id' => 812, 'duplicate' => false, 'status' => 'sent_externally'], 201)]);
+
+    Smartmailto::reportExternalSend('ff:recibo:555', Identity::user(123, 'ana@ff.mx'), 'recibo', Carbon::parse('2026-10-08T12:10:00Z'), reason: 'expired');
+
+    Http::assertSent(fn (Request $request) => $request->url() === 'https://smartmailto.test/api/send/external' && $request->data() === [
+        'idempotency_key' => 'ff:recibo:555', 'template' => 'recibo', 'user_id' => '123', 'email' => 'ana@ff.mx',
+        'sent_at' => '2026-10-08T12:10:00+00:00', 'channel' => 'ses_direct', 'reason' => 'expired',
+    ]);
+    expect(fn () => Smartmailto::reportExternalSend('ff:recibo:1'))->toThrow(InvalidArgumentException::class, 'identity and the template');
+});
+
+test('la consulta previa codifica cada segmento de la llave y conserva la diagonal; heartbeat por POST (F-010 regla 17.3 y 25)', function () {
+    config(['smartmailto.outbox.enabled' => true]);
+    (require __DIR__.'/../../database/migrations/2026_10_08_000000_create_smartmailto_outbox_tables.php')->up();
+    Http::fake([
+        'smartmailto.test/api/send/ff%3Arecibo/2026%2010/1' => Http::response(['idempotency_key' => 'ff:recibo/2026 10/1', 'status' => 'sent', 'sent_at' => '2026-10-08T12:00:02Z'], 200),
+        'smartmailto.test/api/outbox/heartbeat' => Http::response(['ok' => true, 'received_at' => '2026-10-08T12:00:00Z'], 200),
+        '*' => Http::response(['message' => 'down'], 503),
+    ]);
+
+    Smartmailto::send('recibo', Identity::user(7), [], 'ff:recibo/2026 10/1', now()->addMinutes(10));
+    Carbon::setTestNow(now()->addMinutes(10));
+    app(OutboxWorker::class)->runOnce();
+    Carbon::setTestNow();
+
+    expect(app(Outbox::class)->table()->value('status'))->toBe('acked');
+    Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->url() === 'https://smartmailto.test/api/outbox/heartbeat' && $request->data() === []);
 });

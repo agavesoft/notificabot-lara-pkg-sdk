@@ -5,6 +5,7 @@ namespace Agavesoft\Smartmailto\Testing;
 use Agavesoft\Smartmailto\Identity;
 use Agavesoft\Smartmailto\Smartmailto;
 use Closure;
+use DateTimeInterface;
 use PHPUnit\Framework\Assert as PHPUnit;
 
 /**
@@ -261,6 +262,35 @@ class SmartmailtoFake extends Smartmailto
         $matches = array_filter($this->provisioned, fn ($call) => $call['resource'] === $resource && $call['name'] === $name && ($callback === null || $callback($call['body'])));
 
         PHPUnit::assertNotEmpty($matches, "The expected [{$resource}/{$name}] was not provisioned.");
+    }
+
+    /**
+     * F-010: reportes de envio de emergencia (`reportExternalSend`), registrados sin red ni outbox.
+     *
+     * @var list<array{key: string, identity: Identity|null, template: string|null, channel: string, reason: string|null}>
+     */
+    public array $externalReports = [];
+
+    public function reportExternalSend(
+        string $idempotencyKey,
+        ?Identity $identity = null,
+        ?string $template = null,
+        ?DateTimeInterface $sentAt = null,
+        string $channel = 'ses_direct',
+        ?string $reason = null,
+    ): void {
+        $this->externalReports[] = ['key' => $idempotencyKey, 'identity' => $identity, 'template' => $template, 'channel' => $channel, 'reason' => $reason];
+    }
+
+    public function assertExternalSendReported(string $idempotencyKey): void
+    {
+        PHPUnit::assertNotEmpty(array_filter($this->externalReports, fn ($report) => $report['key'] === $idempotencyKey), "The emergency send [{$idempotencyKey}] was not reported.");
+    }
+
+    /** F-010: algun link() cumple el callback `fn (array $body)` (survivor, absorbed, reason, link_id). */
+    public function assertLinked(?Closure $callback = null): void
+    {
+        PHPUnit::assertNotEmpty(array_filter($this->calls('contacts/link'), fn ($body) => $callback === null || $callback($body)), 'No matching link call.');
     }
 
     public function assertNothingDelivered(): void

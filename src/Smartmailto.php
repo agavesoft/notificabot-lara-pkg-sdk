@@ -463,7 +463,7 @@ class Smartmailto
             return null;
         }
 
-        $client = $this->app->make(SmartmailtoClient::class);
+        $client = $this->app->make(SmartmailtoClient::class)->withTimeout((int) $this->config('provision_timeout', 120));
 
         return match ($method) {
             'get' => $client->get($path),

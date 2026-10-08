@@ -6,6 +6,7 @@
 use Agavesoft\Smartmailto\Facades\Smartmailto;
 use Agavesoft\Smartmailto\Identity;
 use Agavesoft\Smartmailto\Jobs\DeliverToSmartmailto;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -80,6 +81,7 @@ test('manda todo en un solo paquete: variables, bloques, plantillas y workflows 
     $this->artisan('smartmailto:provision', ['path' => fixtureDir()])
         ->expectsOutputToContain('aviso template recibo-compra: unknown_variable data:folio en subject')
         ->expectsOutputToContain('template bienvenida: created (draft)')
+        ->expectsOutputToContain('workflow checkout quedo inactivo: si estaba activo ya no inscribe contactos')
         ->expectsOutputToContain('--activate')
         ->assertSuccessful();
 
@@ -118,6 +120,23 @@ test('un paquete rechazado imprime todos los items y falla sin aplicar nada (F-0
         ->assertFailed();
 
     Http::assertSentCount(1);
+});
+
+test('un workflow pausado lo avisa: se reactiva en el panel', function () {
+    Http::fake(['*' => Http::response(['results' => [['type' => 'workflow', 'name' => 'checkout', 'result' => 'updated', 'status' => 'paused']], 'warnings' => []], 200)]);
+
+    $this->artisan('smartmailto:provision', ['path' => fixtureDir(), '--activate' => true])
+        ->expectsOutputToContain('workflow checkout esta pausado')
+        ->assertSuccessful();
+});
+
+test('sin respuesta (timeout) avisa que pudo aplicarse y que repetirlo es seguro', function () {
+    Http::fake(fn () => throw new ConnectionException('cURL error 28: Operation timed out'));
+
+    $this->artisan('smartmailto:provision', ['path' => fixtureDir()])
+        ->expectsOutputToContain('Could not reach Smartmailto')
+        ->expectsOutputToContain('No se sabe si se aplico')
+        ->assertFailed();
 });
 
 test('un rechazo sin items (aprovisionamiento apagado) muestra el cuerpo', function () {
@@ -172,6 +191,7 @@ test('variables invalidas fallan antes de llamar (F-009)', function (string $con
     'scope invalido' => ["- scope: perfil\n  key: plan\n", '`scope`'],
     'clave invalida' => ["- scope: contact\n  key: Plan-Pro\n", '`key`'],
     'event en contact' => ["- scope: contact\n  key: plan\n  event: orden_creada\n", 'solo aplica'],
+    'event con espacios' => ["- scope: event\n  key: orden\n  event: 'orden_creada '\n", 'sin espacios'],
     'llave desconocida' => ["- scope: contact\n  key: plan\n  sensible: true\n", 'sensible'],
     'fecha sin comillas' => ["- scope: contact\n  key: alta\n  type: date\n  default: 2026-01-01\n", 'comillas'],
     'json invalido' => ['[{nope', 'JSON', 'variables/a.json'],

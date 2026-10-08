@@ -11,7 +11,7 @@ composer require agavesoft/smartmailto
 php artisan vendor:publish --tag=smartmailto-config   # opcional
 ```
 
-Antes de publicar una version, `develop` se puede requerir desde el repositorio como `2.2.x-dev` (`"agavesoft/smartmailto": "^2.2@dev"` con un repositorio `vcs` a `https://github.com/agavesoft/notificabot-lara-pkg-sdk`).
+Antes de publicar una version, `develop` se puede requerir desde el repositorio como `2.3.x-dev` (`"agavesoft/smartmailto": "^2.3@dev"` con un repositorio `vcs` a `https://github.com/agavesoft/notificabot-lara-pkg-sdk`).
 
 ```dotenv
 SMARTMAILTO_API_URL=https://smartmailto.example.com
@@ -23,6 +23,7 @@ SMARTMAILTO_ENABLED=true                 # false = el SDK no hace nada
 # SMARTMAILTO_WEBHOOK_SECRET=whsec_...   # webhook de falla (F-008)
 # SMARTMAILTO_ATTACHMENTS_MAX_FILES=10
 # SMARTMAILTO_ATTACHMENTS_MAX_BYTES=7340032
+# SMARTMAILTO_PROVISION_TIMEOUT=120      # espera del aprovisionamiento y el catalogo (F-009)
 ```
 
 Por default **cada llamada se encola despues del commit** de la transaccion en curso: necesitas un worker de cola corriendo (`php artisan queue:work`). Con la cola `sync` la llamada se hace una sola vez al terminar el commit, sin reintentos; una falla dispara `SmartmailtoDeliveryFailed`. Para reintentos reales usa una cola de verdad (`database`, `redis`). Con `SMARTMAILTO_QUEUE=false` las llamadas son sincronas y lanzan `SmartmailtoException` si fallan.
@@ -144,8 +145,8 @@ php artisan smartmailto:provision resources/smartmailto              # un solo p
 php artisan smartmailto:provision resources/smartmailto --activate   # ademas activa plantillas y workflows
 ```
 
-- **Todo o nada (F-009, RN-16):** el comando arma **un solo paquete** (variables → bloques → plantillas → workflows → activaciones) y lo manda a `POST /api/provision`. Si cualquier pieza falla, Smartmailto no cambia nada, lo que estaba activo **sigue enviando** con su version anterior, y el comando imprime **todos** los items fallidos y sale con codigo 1. Correrlo en cada deploy es seguro.
-- **Borrador y activacion (RN-4):** sin `--activate`, lo nuevo queda `draft` y un workflow cuya definicion cambia queda inactivo. Con `--activate` se activan en la misma operacion, con las mismas reglas que el panel: cero referencias a variables inexistentes, y ninguna referencia **nueva** a una obsoleta. Un workflow revisa tambien todas sus plantillas, que deben venir activas o activarse en el mismo paquete.
+- **Todo o nada (F-009, RN-16):** el comando arma **un solo paquete** (variables → bloques → plantillas → workflows → activaciones) y lo manda a `POST /api/provision`. Si cualquier pieza falla, Smartmailto no cambia nada, lo que estaba activo **sigue enviando** con su version anterior, y el comando imprime **todos** los items fallidos y sale con codigo 1. Correrlo en cada deploy es seguro. Si no hubo respuesta (timeout, `SMARTMAILTO_PROVISION_TIMEOUT`, default 120 s), el paquete pudo aplicarse: vuelve a correrlo, porque es idempotente.
+- **Borrador y activacion (RN-4):** sin `--activate`, lo nuevo queda `draft` y un workflow cuya definicion cambia queda inactivo. Si estaba activo, deja de inscribir contactos y el comando lo advierte. Un workflow pausado por quejas solo se reactiva en el panel. Con `--activate` se activan en la misma operacion, con las mismas reglas que el panel: cero referencias a variables inexistentes, y ninguna referencia **nueva** a una obsoleta. Un workflow revisa tambien todas sus plantillas, que deben venir activas o activarse en el mismo paquete.
 - **Avisos (`warnings`):** se imprimen (`aviso template recibo: unknown_variable contact:nombre en body`) y no hacen fallar. Codigos: `unknown_variable`, `obsolete_variable`, `secret_in_subject`, `unknown_event`, `missing_group_operator`, `sensitive_kept` y `fiscal_key`.
 - **`--validate`** corre el mismo paquete en `POST /api/validate` sin guardar nada. Sale con codigo 1 si no es valido. Pide el token y el aprovisionamiento habilitado, igual que el deploy. Con `--activate` valida tambien la activacion. Reemplaza cualquier copia local del parser de plantillas: la unica regla es la del servidor (RN-13).
 - El cuerpo va tal cual (metalenguaje de Smartmailto; **no se convierte Markdown**: `.md` solo es el formato del archivo). Frontmatter plano `llave: valor`. El nombre es el del archivo (`^[a-z0-9][a-z0-9_-]*$`).
@@ -320,7 +321,7 @@ $fake->assertVariablePut('contact', 'plan');
 $fake->assertActivated('workflow', 'checkout');
 ```
 
-El fake no sale a la red. Sus respuestas se ajustan con `provisionResponse`, `validateResponse`, `variablesResponse` y `schemaResponse`.
+El fake no sale a la red. Sus respuestas se ajustan con `provisionResponse`, `validateResponse`, `variablesResponse`, `usagesResponse`, `deleteResponse` y `schemaResponse`.
 
 ## Contrato de eventos de Factura Facilita
 

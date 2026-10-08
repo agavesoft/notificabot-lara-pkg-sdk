@@ -110,6 +110,10 @@ class ProvisionCommand extends Command
 
             if ($e->items() === []) {
                 $this->error($e->getMessage().($e->response !== [] ? ' '.json_encode($e->response, self::JSON_FLAGS) : ''));
+                if ($e->transient) {
+                    // Sin respuesta (timeout) el servidor pudo aplicar el paquete: es idempotente, repetirlo es seguro.
+                    $this->line('No se sabe si se aplico: vuelve a correrlo (es idempotente).');
+                }
 
                 return self::FAILURE;
             }
@@ -133,6 +137,17 @@ class ProvisionCommand extends Command
             $this->line(trim(($result['type'] ?? '').' '.($result['name'] ?? '')).': '.($result['result'] ?? '?').(isset($result['status']) ? " ({$result['status']})" : ''));
         }
         $this->info(count($items).' elemento(s) aprovisionados en un solo paquete.');
+
+        foreach ($response['results'] ?? [] as $result) {
+            $name = ($result['type'] ?? '').' '.($result['name'] ?? '');
+            // El paquete no dice si estaba activo: un workflow cambiado queda inactivo y deja de inscribir contactos.
+            if (! $activate && ($result['type'] ?? null) === 'workflow' && ($result['result'] ?? null) === 'updated' && ($result['status'] ?? null) === 'inactive') {
+                $this->warn("{$name} quedo inactivo: si estaba activo ya no inscribe contactos hasta activarlo (--activate o el panel).");
+            }
+            if (($result['status'] ?? null) === 'paused') {
+                $this->warn("{$name} esta pausado por quejas: se reactiva en el panel.");
+            }
+        }
 
         $pending = array_filter($response['results'] ?? [], fn ($result) => in_array($result['status'] ?? null, ['draft', 'inactive'], true));
         if (! $activate && $pending !== []) {
@@ -274,8 +289,8 @@ class ProvisionCommand extends Command
             unset($entry['event']);
         } elseif ($scope === 'contact') {
             throw new InvalidArgumentException("{$where}: `event` solo aplica a variables event o secret.");
-        } elseif (! is_string($event) || trim($event) === '') {
-            throw new InvalidArgumentException("{$where}: `event` debe ser el nombre del evento (o no ponerlo: comun).");
+        } elseif (! is_string($event) || trim($event) === '' || trim($event) !== $event) {
+            throw new InvalidArgumentException("{$where}: `event` debe ser el nombre del evento, sin espacios alrededor (o no ponerlo: comun).");
         }
 
         return $entry;

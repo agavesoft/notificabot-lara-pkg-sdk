@@ -25,6 +25,12 @@ return [
     // Segundos de espera por peticion.
     'timeout' => (int) env('SMARTMAILTO_TIMEOUT', 10),
 
+    /*
+     * F-009: espera de las llamadas de aprovisionamiento y catalogo (sincronas). Un paquete completo
+     * corre en una transaccion del servidor, que espera hasta 10 s por el candado del proyecto.
+     */
+    'provision_timeout' => (int) env('SMARTMAILTO_PROVISION_TIMEOUT', 120),
+
     // Espera entre reintentos (segundos) y ventana maxima de reintento (horas).
     'backoff' => [30, 120, 600, 3600],
 

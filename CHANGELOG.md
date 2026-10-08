@@ -9,6 +9,11 @@
   - `smartmailto:provision` lee `variables/*.yaml|yml|json` (una lista por archivo) y manda **un solo paquete**. Antes eran un `PUT` por recurso y se detenia en el primer rechazo. Ahora, si algo falla, imprime **todos** los items fallidos y no aplica nada. Opciones nuevas: `--activate` y `--validate` (para CI). Los avisos (`warnings`) se imprimen y no hacen fallar.
   - `SmartmailtoException`: `error()`, `items()`, `usages()` y `warnings()` leen el cuerpo del rechazo. El mensaje incluye el codigo (`Smartmailto rejected provision (422 provision_failed).`).
   - `SmartmailtoFake` registra el catalogo, los paquetes y las activaciones sin salir a la red. Asserts nuevos: `assertPackageProvisioned()`, `assertVariablePut()` y `assertActivated()`.
+  - El aprovisionamiento y el catalogo usan su propia espera: `smartmailto.provision_timeout` (`SMARTMAILTO_PROVISION_TIMEOUT`, default 120 s). La espera de la ingesta sigue en 10 s.
+  - El comando avisa en tres casos:
+    - un workflow que estaba activo y quedo inactivo;
+    - un workflow pausado;
+    - un timeout, que pudo aplicarse (repetirlo es seguro).
   - Dependencia nueva: `symfony/yaml` (`^7.2|^8.0`). `composer.json`: `branch-alias` `dev-develop` → `2.3.x-dev`.
 
 ## v2.2.0 — sin publicar

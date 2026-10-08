@@ -161,16 +161,22 @@ class SmartmailtoFake extends Smartmailto
         return ['result' => 'obsolete', 'scope' => $scope, 'key' => $key, 'status' => 'obsolete'];
     }
 
+    /** false simula una variable que no existia. */
+    public bool $deleteResponse = true;
+
+    /** @var list<array<string, mixed>> */
+    public array $usagesResponse = [];
+
     public function deleteVariable(string $scope, string $key, ?string $event = null): bool
     {
         $this->variablesDeleted[] = ['scope' => $scope, 'key' => $key, 'event' => $event];
 
-        return true;
+        return $this->deleteResponse;
     }
 
     public function variableUsages(string $scope, string $key, ?string $event = null): ?array
     {
-        return [];
+        return $this->usagesResponse;
     }
 
     public function schema(): ?array

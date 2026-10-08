@@ -10,13 +10,27 @@ use InvalidArgumentException;
  * - Identity::user($id, $email): persona con cuenta en tu app. Mandar el correo junto con el id
  *   permite unirla con su historial de invitado (por ejemplo al reclamar una orden).
  * - Identity::guest($email): persona sin cuenta (compra como invitado), identificada por correo.
+ * - Identity::external($email): F-010 (R2) destinatario externo de un envio transaccional (por ejemplo
+ *   el receptor de un CFDI). Nunca se vuelve contacto: solo vale en send() y reportExternalSend().
  */
 final class Identity
 {
     private function __construct(
         public readonly ?string $userId,
         public readonly ?string $email,
+        public readonly bool $external = false,
     ) {}
+
+    public static function external(string $email): self
+    {
+        $email = self::cleanEmail($email);
+
+        if ($email === null) {
+            throw new InvalidArgumentException('Identity::external() requires an email.');
+        }
+
+        return new self(null, $email, true);
+    }
 
     public static function user(string|int $userId, ?string $email = null): self
     {

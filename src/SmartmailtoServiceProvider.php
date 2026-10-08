@@ -2,9 +2,14 @@
 
 namespace Agavesoft\Smartmailto;
 
+use Agavesoft\Smartmailto\Console\OutboxPruneCommand;
+use Agavesoft\Smartmailto\Console\OutboxRetryCommand;
+use Agavesoft\Smartmailto\Console\OutboxStatusCommand;
+use Agavesoft\Smartmailto\Console\OutboxWorkCommand;
 use Agavesoft\Smartmailto\Console\ProvisionCommand;
 use Agavesoft\Smartmailto\Http\Middleware\VerifySmartmailtoPull;
 use Agavesoft\Smartmailto\Http\Middleware\VerifySmartmailtoWebhook;
+use Agavesoft\Smartmailto\Outbox\Outbox;
 use Agavesoft\Smartmailto\Pull\PullRoute;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
@@ -23,6 +28,8 @@ class SmartmailtoServiceProvider extends ServiceProvider
             $app['config']->get('smartmailto.api_token'),
             (int) $app['config']->get('smartmailto.timeout', 10),
         ));
+
+        $this->app->singleton(Outbox::class, fn ($app) => new Outbox($app));
 
         $this->app->singleton(Smartmailto::class, fn ($app) => new Smartmailto($app));
         $this->app->alias(Smartmailto::class, 'smartmailto');
@@ -47,7 +54,18 @@ class SmartmailtoServiceProvider extends ServiceProvider
                 __DIR__.'/../config/smartmailto.php' => $this->app->configPath('smartmailto.php'),
             ], 'smartmailto-config');
 
-            $this->commands([ProvisionCommand::class]);
+            // F-010: primera migracion del paquete (outbox). Solo se publica: no se corre sola.
+            $this->publishesMigrations([
+                __DIR__.'/../database/migrations' => $this->app->databasePath('migrations'),
+            ], 'smartmailto-migrations');
+
+            $this->commands([
+                ProvisionCommand::class,
+                OutboxWorkCommand::class,
+                OutboxStatusCommand::class,
+                OutboxRetryCommand::class,
+                OutboxPruneCommand::class,
+            ]);
         }
     }
 }

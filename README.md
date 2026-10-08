@@ -11,7 +11,7 @@ composer require agavesoft/smartmailto
 php artisan vendor:publish --tag=smartmailto-config   # opcional
 ```
 
-Antes de publicar una version, `develop` se puede requerir desde el repositorio como `2.4.x-dev` (`"agavesoft/smartmailto": "^2.4@dev"` con un repositorio `vcs` a `https://github.com/agavesoft/notificabot-lara-pkg-sdk`).
+Antes de publicar una version, `develop` se puede requerir desde el repositorio como `2.5.x-dev` (`"agavesoft/smartmailto": "^2.5@dev"` con un repositorio `vcs` a `https://github.com/agavesoft/notificabot-lara-pkg-sdk`).
 
 ```dotenv
 SMARTMAILTO_API_URL=https://smartmailto.example.com
@@ -28,6 +28,10 @@ SMARTMAILTO_ENABLED=true                 # false = el SDK no hace nada
 # SMARTMAILTO_PULL_SECRET=pullsec_...
 # SMARTMAILTO_PULL_RESOLVER=App\Smartmailto\MiPullResolver
 # SMARTMAILTO_PULL_HISTORY_MONTHS=       # vacio = toda la historia de eventos
+# SMARTMAILTO_OUTBOX_ENABLED=false       # outbox transaccional: eventos garantizados (F-010)
+# SMARTMAILTO_OUTBOX_CONNECTION=         # conexion de BD de tus transacciones (vacio = la default)
+# SMARTMAILTO_ALERTS_MAIL_TO=soporte@agavesoft.com.mx
+# SMARTMAILTO_ALERTS_TEAMS_WEBHOOK_URL=  # webhook de un flujo de Workflows de Power Automate
 ```
 
 Por default **cada llamada se encola despues del commit** de la transaccion en curso: necesitas un worker de cola corriendo (`php artisan queue:work`). Con la cola `sync` la llamada se hace una sola vez al terminar el commit, sin reintentos; una falla dispara `SmartmailtoDeliveryFailed`. Para reintentos reales usa una cola de verdad (`database`, `redis`). Con `SMARTMAILTO_QUEUE=false` las llamadas son sincronas y lanzan `SmartmailtoException` si fallan.
@@ -59,7 +63,18 @@ Smartmailto::send('recibo-compra', Identity::user($user->id, $user->email), [
 1. **`eventId` sale del hecho de negocio**, nunca de un uuid nuevo: `"{app}:{evento}:{id del objeto}"`. Asi un reintento (tuyo o del SDK) no duplica el evento: Smartmailto descarta el repetido.
 2. **`idempotencyKey` en cada `send`**: el mismo valor nunca manda dos correos.
 3. **`secrets`** son valores de un solo uso (ligas de activacion o de pago). Smartmailto los guarda cifrados, no los muestra en su panel ni en logs, y solo las plantillas los leen (`{{secret:activation_url}}`). Esas ligas no pasan por el seguimiento de clics.
-4. **Nunca mandes datos fiscales** (RFC, contenido de CFDI) ni datos que el correo no necesita.
+4. **Datos fiscales y sensibles segun el canal** (RFC, UUID/folio fiscal, contenido de CFDI, montos fiscales). La regla depende de si Smartmailto guarda el dato o solo lo entrega:
+
+   | Canal | Datos fiscales o sensibles | Por que |
+   |---|---|---|
+   | Propiedades de eventos (`track`) | **Prohibidos** | Se guardan 13 meses, se ven en la linea de tiempo y alimentan workflows |
+   | Atributos del contacto (`identify`) | **Prohibidos** | Se guardan, se muestran y alimentan condiciones |
+   | Datos de plantilla (`send` → `data`) | **Prohibidos** | Se conservan para recrear el correo |
+   | `secrets` (`send` / `track`) | **Permitidos** | Cifrados, se ven como `[secreto]` y se borran al estado final. Ahi va, por ejemplo, el folio fiscal que imprime la plantilla |
+   | Adjuntos de envios **transaccionales** | **Permitidos** | Smartmailto no los conserva despues de la entrega, salvo que el proyecto retenga adjuntos con la copia del correo |
+   | Nombre del archivo adjunto | **Permitido** | Puede llevar RFC o UUID: Smartmailto lo enmascara en logs y en "recrear correo" (`***_****.xml #a1b2c3`) |
+
+   Una variable marcada `sensitive` en el catalogo (F-009) no se puede usar en condiciones ni se muestra en claro. Manda solo lo que el correo necesita.
 5. **`object`** (`['order', 100]`) identifica el objeto de negocio; Smartmailto lo usa para llevar una secuencia por orden.
 6. **Unir invitado y cuenta**: cuando la persona reclama su orden o se registra, manda un evento o `identify` con `Identity::user($id, $correoDeLaOrden)`. Si tu app borra el correo de la orden al reclamarla, leelo antes.
 
@@ -72,10 +87,134 @@ Smartmailto::send('recibo-compra', Identity::user($user->id, $user->email), $dat
     idempotencyKey: "ff:recibo:{$order->id}", sendBefore: now()->addMinutes(10));
 ```
 
-- Si la peticion llega despues de `sendBefore` (Smartmailto caido o tu cola atrasada), Smartmailto responde 410 y el SDK dispara `SmartmailtoDeliveryFailed`: manda ese correo por tu cuenta.
-- Si Smartmailto ya lo habia aceptado (202) pero no pudo enviarlo antes de `sendBefore` (por ejemplo, su cola esta detenida), **el SDK no se entera**: Smartmailto avisa por el **webhook de fallas del proyecto** (`failure_webhook_url`, se configura en el panel) con `{"event": "send_expired", "idempotency_key": "...", "send_id": ...}`. Tu app debe recibir ese webhook y mandar directo el correo de esa `idempotency_key`. Es parte obligatoria del contrato de emergencia.
-- En ambos casos Smartmailto nunca lo envia tarde.
-- `Smartmailto::health()` devuelve `status` (`ok`, `degraded`, `down`), el atraso de las colas y el estado del proveedor: consultalo en tu scheduler y, si no es `ok` por varios minutos, enciende tu bandera para mandar directo.
+**Todo correo sale por Smartmailto; tu envio directo (SES) es solo emergencia y se reporta.** Con el outbox (F-010, ver abajo) la emergencia ocurre **solo** en estos casos, y nunca por un fallo de red ni por `health()`:
+
+| Disparador | Cuando |
+|---|---|
+| Evento `SmartmailtoOutboxFailed` con `needsEmergencySend()` | La fila `send` recibio un rechazo definitivo (`reason` = `"422"`, `"404"`...) o llego a su `sendBefore` sin acuse (`reason` = `"expired"`). Antes de disparar, el SDK pregunta a Smartmailto (`GET /api/send/{key}`): si el envio ya salio, esta en cola o se descarto a proposito (supresion, regla de repeticion), no hay emergencia |
+| Webhook de falla `send_expired` | Smartmailto lo habia aceptado pero no lo mando antes de `sendBefore` (su cola se detuvo) |
+
+En los dos casos tu app manda el correo por su canal directo, lo registra (FF: `correos_salientes`) y lo **reporta**:
+
+El listener **debe ir en cola** (`implements ShouldQueue`): el evento se dispara una sola vez, y si un listener sincrono falla (SES caido, bug) el worker solo lo registra en el log y esa emergencia se pierde. En cola, la cola lo reintenta.
+
+```php
+// app/Listeners/SmartmailtoEmergencia.php
+class SmartmailtoEmergencia implements ShouldQueue
+{
+    public function handle(SmartmailtoOutboxFailed $event): void
+    {
+        if (! $event->needsEmergencySend()) {
+            return;   // track/identify/link: no hay correo que mandar; soporte revisa con el runbook
+        }
+
+        // Idempotente por la llave: si la cola reintenta el listener, el correo no sale dos veces.
+        $salida = CorreoSaliente::firstWhere('idempotency_key', $event->key)
+            ?? CorreoSaliente::mandarPorSes($event->key);   // tu app sabe armar el correo de esa llave
+
+        // Smartmailto lo registra como "enviado por emergencia desde el proyecto" y ya no lo manda aunque
+        // le llegue despues. Si la fila esta en vuelo lanza OutboxRowInFlight: deja que la cola reintente.
+        Smartmailto::reportExternalSend($event->key, sentAt: $salida->sent_at, reason: $event->reason);
+    }
+}
+```
+
+- Con el outbox, `reportExternalSend()` toma la identidad y la plantilla de la fila `send` (o pasalas: `reportExternalSend($key, $identity, 'recibo')`), cierra esa fila como `superseded` y deja el reporte en el outbox con la misma garantia de entrega. Sin outbox lo encola como cualquier llamada (identidad y plantilla obligatorias).
+- **Por que no hay duplicados:** Smartmailto revisa `send_before` justo antes de entregar al proveedor, y una llave reportada se acusa sin enviar (`duplicate: true`) en cualquier reintento posterior.
+- **Riesgo residual aceptado:** si Smartmailto entrego antes de `sendBefore`, el acuse se perdio y Smartmailto no responde la consulta, sale una segunda copia; al llegar tu reporte queda como `duplicate_external` (metrica, sin alerta critica).
+- **Costo aceptado:** con Smartmailto caido, el recibo sale por emergencia al vencer `sendBefore` (10 min en los esenciales de FF).
+- Sin outbox sigue el contrato de v2.1: 410 → `SmartmailtoDeliveryFailed`, y el webhook `send_expired`; reporta igual con `reportExternalSend()`.
+- `Smartmailto::health()` (`ok`, `degraded`, `down`) sirve para tableros; ya no es motivo para mandar directo.
+
+### Outbox: eventos garantizados (F-010)
+
+Con el outbox, `track`, `send`, `identify`, `link` y `reportExternalSend` **no encolan un job**: escriben una fila en la tabla `smartmailto_outbox` **dentro de la transaccion de tu app**. Si la accion de negocio hace rollback no queda nada; si hace commit, la fila espera hasta que Smartmailto **acusa** recibo con su llave. Requiere un servidor con F-010.
+
+```bash
+php artisan vendor:publish --tag=smartmailto-migrations
+php artisan migrate
+```
+
+```dotenv
+SMARTMAILTO_OUTBOX_ENABLED=true
+SMARTMAILTO_OUTBOX_CONNECTION=           # la conexion de tus transacciones (vacio = la default)
+SMARTMAILTO_ALERTS_MAIL_TO=soporte@agavesoft.com.mx
+SMARTMAILTO_ALERTS_TEAMS_WEBHOOK_URL=https://...   # webhook de un flujo de Workflows de Power Automate
+```
+
+```php
+// routes/console.php
+Schedule::command('smartmailto:outbox:work --max-time=55')->everyMinute()->withoutOverlapping()->onOneServer();
+Schedule::command('smartmailto:outbox:prune')->daily();
+
+// o como daemon (supervisor): php artisan smartmailto:outbox:work
+```
+
+```php
+DB::transaction(function () use ($order) {
+    $order->markPaid();
+
+    // La fila queda en esta transaccion: sin commit no hay evento ni correo.
+    Smartmailto::track('orden_pagada', Identity::user($order->user_id, $order->email), ['total' => $order->total],
+        eventId: "ff:orden_pagada:{$order->id}", occurredAt: $order->paid_at);
+    Smartmailto::send('recibo-compra', Identity::user($order->user_id, $order->email), $data,
+        idempotencyKey: "ff:recibo:{$order->id}", sendBefore: now()->addMinutes(10));   // obligatorio con el outbox
+});
+```
+
+**Que hace el worker** (`smartmailto:outbox:work`, una pasada con `--once`):
+
+| Situacion | Resultado |
+|---|---|
+| Acuse con la llave (`event_id`, `idempotency_key`, `link_id`; `identify` con cualquier 2xx) | `acked` |
+| Red, 5xx, 429, 401/403 (token rotado), SDK sin configurar, respuesta sin acuse | Reintento: 30 s, 2 min, 10 min, 1 h y despues cada hora |
+| 72 h sin acuse | `failed` (`reason=gave_up`) y `SmartmailtoOutboxFailed`; se reprocesa con `smartmailto:outbox:retry` |
+| `send` que llega a `sendBefore` sin acuse, o 410 | `expired` + emergencia (despues de la consulta previa) |
+| Rechazo definitivo (422, 404 de plantilla, 413) | `failed` + alerta inmediata agrupada por plantilla + `SmartmailtoOutboxFailed` |
+| `link` con 404 (el contacto aun no llega) o 409 `contact_changed`; reporte con 409 | Reintento |
+
+- **Idempotencia:** la misma llave pendiente no se duplica en la tabla y Smartmailto descarta los repetidos. `identify` lleva una llave por llamada y manda `updated_at` (la hora en que lo llamaste) para que gane el mas reciente aunque lleguen fuera de orden.
+- **Hora real:** un `track` sin `occurredAt` guarda la hora del commit; los workflows cuentan desde ahi aunque el evento llegue horas despues.
+- **Aviso de vida:** cada 5 min el worker hace `POST /api/outbox/heartbeat`. Smartmailto alerta (con su propio canal) si el worker pasa 30 min sin avisar.
+- **Cifrado:** el payload de cada fila va cifrado con `APP_KEY`. Rotar la llave con filas pendientes las deja sin poder leerse (se reintentan y alertan por antiguedad): vacia el outbox antes de rotarla.
+- `smartmailto:outbox:status` (conteos, la mas vieja, alertas abiertas), `smartmailto:outbox:retry {id*} --key= --failed` (nunca un `send`: al fallar ya paso a tu emergencia), `smartmailto:outbox:prune` (acked 7 dias; failed, expired y superseded 30 dias) y `smartmailto:outbox:prune --contact=correo|user_id` (ARCO: borra las filas de esa persona).
+- `batch()` (carga inicial) no usa el outbox: sigue por la cola; un lote se puede repetir sin riesgo.
+
+**Alertas (las emite tu app, agrupadas, nunca una por fila):**
+
+- Filas sin acuse: **una** alerta a los 15 min ("N pendientes, la mas vieja de hace X, ultimo error"), recordatorios a 1 h, 4 h, 12 h, 24 h y 48 h con conteos actualizados, **un solo resumen** a las 72 h de las filas que se rindieron y **"recuperado"** cuando ya no queda nada atrasado.
+- Rechazos definitivos: alerta inmediata agrupada por plantilla; los siguientes de la misma plantilla se juntan en ventanas de 15 min.
+- Canales: correo (`alerts.mail_to`, con el mailer de tu app) y Teams (`alerts.teams_webhook_url`, tarjeta adaptable). Siempre quedan tambien en el log. Un escalon que no sale por ningun canal se reintenta en la siguiente pasada.
+- Sin datos personales: conteos, edades, llaves y codigos de error.
+
+**Adjuntos con el outbox (J12):** hasta **1 MB** por archivo van dentro del mensaje (cifrados en la fila). Uno mas grande va por URL firmada que Smartmailto descarga al aceptar el envio:
+
+```php
+Attachment::fromDisk('s3', "cfdi/{$cfdi->uuid}.pdf", "{$cfdi->rfc}_{$cfdi->folio}.pdf");   // URL firmada nueva en cada intento (24 h)
+Attachment::fromUrl($urlHttps, 'reporte.pdf', $sha256);                                       // URL que controlas tu
+```
+
+El SDK calcula el `sha256` al llamar `send()` y Smartmailto lo verifica. El archivo debe seguir en el disco hasta el acuse. Tope por archivo: 15 MB (`attachments.url_max_bytes`). `fromDisk`/`fromUrl` tambien funcionan sin outbox.
+
+### Destinatarios externos, ligar contactos y consentimiento (F-010)
+
+```php
+// Receptor de un CFDI: no se vuelve contacto (solo plantillas transaccionales). `origin` liga el envio
+// a quien lo emitio, para verlo en Envios.
+Smartmailto::send('cfdi-documentos', Identity::external($receptor->email), $data,
+    idempotencyKey: "ff:cfdi-documentos:{$cfdi->id}:{$envio->id}", sendBefore: now()->addDay(),
+    origin: Identity::user($user->id));
+
+// La compra de un invitado era de una cuenta (timbres en otra cuenta): ligalos.
+Smartmailto::link(Identity::user($user->id), Identity::guest($order->email), 'timbres-en-otra-cuenta',
+    linkId: "ff:link:order:{$order->id}");
+
+// La persona volvio a aceptar correos (casilla explicita): reactiva a un contacto borrado por ARCO.
+Smartmailto::identify(Identity::user($user->id, $user->email), [], consent: true);
+```
+
+- `Identity::external()` solo vale en `send()` y `reportExternalSend()`; en `track`, `identify` o `link` lanza `InvalidArgumentException`.
+- `link()` nunca crea contactos: los dos deben existir (`404 contact_not_found`). Dos cuentas con `user_id` no se ligan (`409 both_have_user_id`). Es idempotente por `linkId`.
 
 ### Adjuntos, copias y remitente (F-008)
 
@@ -85,9 +224,12 @@ Todo es opcional y con nombre: un `send()` sin estos parametros manda exactament
 use Agavesoft\Smartmailto\Attachment;
 
 // CFDI por correo: PDF + XML, varios destinatarios, copia oculta y Reply-To de soporte.
+// Regla 4: el RFC en el NOMBRE del adjunto y el XML como adjunto estan permitidos (transaccional, no se
+// conservan); el folio fiscal va en `secrets`, nunca en `data`.
 Smartmailto::send('cfdi-por-correo', Identity::user($user->id, $user->email), [
-    'folio' => $cfdi->folio, 'total' => $cfdi->total,
+    'folio' => $cfdi->folio,
 ], idempotencyKey: "ff:cfdi-correo:{$cfdi->id}:{$request->id}",
+    secrets: ['folio_fiscal' => $cfdi->uuid],
     attachments: [
         Attachment::fromPath(storage_path("cfdi/{$cfdi->uuid}.pdf"), "{$cfdi->rfc}_{$cfdi->folio}.pdf"),
         Attachment::fromData($cfdi->xml, "{$cfdi->rfc}_{$cfdi->folio}.xml"),   // contenido crudo, no base64
@@ -452,6 +594,7 @@ Respuesta `200` con `X-Smartmailto-Timestamp` y `X-Smartmailto-Signature` = `sha
 - Se reintenta solo lo transitorio (red, 5xx, 429 respetando `Retry-After`) con espera de 30 s, 2 min, 10 min y despues cada hora, hasta 24 h.
 - Un rechazo (422 por datos invalidos, 401 por token) no se reintenta.
 - En ambos casos, al rendirse se dispara `Agavesoft\Smartmailto\Events\SmartmailtoDeliveryFailed` (`endpoint`, `key` = event_id o idempotency key, `status`, `error`). Escuchalo para registrar o alertar. En un lote, cada item invalido dispara su propio evento.
+- Con el outbox (F-010) las reglas son las de su seccion: 72 h de reintentos, alertas agrupadas y `SmartmailtoOutboxFailed` (`outboxId`, `kind`, `key`, `reason`, `template`, `status`, `error`) en vez de `SmartmailtoDeliveryFailed`.
 
 ### Privacidad (consulta y borrado)
 
@@ -480,7 +623,11 @@ $fake->assertProvisioned('templates', 'recibo-compra');
 $fake->assertPackageProvisioned(fn (array $package, bool $activate) => $activate);   // smartmailto:provision
 $fake->assertVariablePut('contact', 'plan');
 $fake->assertActivated('workflow', 'checkout');
+$fake->assertLinked(fn ($body) => $body['link_id'] === 'ff:link:order:555');   // F-010
+$fake->assertExternalSendReported('ff:recibo:555');                            // F-010: tu listener de emergencia
 ```
+
+Con el fake las llamadas no pasan por el outbox, pero sus validaciones si (por ejemplo `sendBefore` obligatorio si `outbox.enabled`).
 
 El fake no sale a la red. Sus respuestas se ajustan con `provisionResponse`, `validateResponse`, `variablesResponse`, `usagesResponse`, `deleteResponse` y `schemaResponse`.
 

@@ -82,6 +82,130 @@ class SmartmailtoFake extends Smartmailto
     }
 
     /**
+     * F-009: paquetes (`provisionPackage` y `validatePackage`), variables y activaciones registrados sin
+     * red. Las respuestas se pueden ajustar con las propiedades `*Response`.
+     *
+     * @var list<array{package: array<string, mixed>, activate: bool, validate: bool}>
+     */
+    public array $packages = [];
+
+    /** @var list<array{scope: string, key: string, event: string|null, definition: array<string, mixed>}> */
+    public array $variablesPut = [];
+
+    /** @var list<array{scope: string, key: string, event: string|null}> */
+    public array $variablesObsoleted = [];
+
+    /** @var list<array{scope: string, key: string, event: string|null}> */
+    public array $variablesDeleted = [];
+
+    /** @var list<array{type: string, name: string}> */
+    public array $activated = [];
+
+    /** @var array<string, mixed> */
+    public array $provisionResponse = ['results' => [], 'warnings' => []];
+
+    /** @var array<string, mixed> */
+    public array $validateResponse = ['valid' => true, 'errors' => [], 'warnings' => [], 'results' => []];
+
+    /** @var list<array<string, mixed>> */
+    public array $variablesResponse = [];
+
+    /** @var array<string, mixed> */
+    public array $schemaResponse = [];
+
+    public function provisionPackage(array $package, bool $activate = false): ?array
+    {
+        $this->packages[] = ['package' => $package, 'activate' => $activate, 'validate' => false];
+
+        return $this->provisionResponse;
+    }
+
+    public function validatePackage(array $package, bool $activate = false): ?array
+    {
+        $this->packages[] = ['package' => $package, 'activate' => $activate, 'validate' => true];
+
+        return $this->validateResponse;
+    }
+
+    public function activateTemplate(string $name): ?array
+    {
+        $this->activated[] = ['type' => 'template', 'name' => $name];
+
+        return ['result' => 'activated', 'status' => 'active'];
+    }
+
+    public function activateWorkflow(string $name): ?array
+    {
+        $this->activated[] = ['type' => 'workflow', 'name' => $name];
+
+        return ['result' => 'activated', 'status' => 'active'];
+    }
+
+    public function variables(?string $scope = null, ?string $event = null): ?array
+    {
+        return array_values(array_filter($this->variablesResponse, fn ($variable) => ($scope === null || ($variable['scope'] ?? null) === $scope)
+            && ($event === null || ($variable['event'] ?? null) === $event)));
+    }
+
+    public function putVariable(string $scope, string $key, array $definition, ?string $event = null): ?array
+    {
+        $this->variablesPut[] = ['scope' => $scope, 'key' => $key, 'event' => $event, 'definition' => $definition];
+
+        return ['result' => 'created', 'scope' => $scope, 'key' => $key, 'warnings' => []];
+    }
+
+    public function obsoleteVariable(string $scope, string $key, ?string $event = null): ?array
+    {
+        $this->variablesObsoleted[] = ['scope' => $scope, 'key' => $key, 'event' => $event];
+
+        return ['result' => 'obsolete', 'scope' => $scope, 'key' => $key, 'status' => 'obsolete'];
+    }
+
+    /** false simula una variable que no existia. */
+    public bool $deleteResponse = true;
+
+    /** @var list<array<string, mixed>> */
+    public array $usagesResponse = [];
+
+    public function deleteVariable(string $scope, string $key, ?string $event = null): bool
+    {
+        $this->variablesDeleted[] = ['scope' => $scope, 'key' => $key, 'event' => $event];
+
+        return $this->deleteResponse;
+    }
+
+    public function variableUsages(string $scope, string $key, ?string $event = null): ?array
+    {
+        return $this->usagesResponse;
+    }
+
+    public function schema(): ?array
+    {
+        return $this->schemaResponse;
+    }
+
+    /** F-009: algun paquete provisionado (no solo validado) cumple el callback `fn (array $package, bool $activate)`. */
+    public function assertPackageProvisioned(?Closure $callback = null): void
+    {
+        $matches = array_filter($this->packages, fn ($call) => ! $call['validate'] && ($callback === null || $callback($call['package'], $call['activate'])));
+
+        PHPUnit::assertNotEmpty($matches, 'The expected Smartmailto package was not provisioned.');
+    }
+
+    public function assertVariablePut(string $scope, string $key, ?Closure $callback = null): void
+    {
+        $matches = array_filter($this->variablesPut, fn ($call) => $call['scope'] === $scope && $call['key'] === $key && ($callback === null || $callback($call['definition'], $call['event'])));
+
+        PHPUnit::assertNotEmpty($matches, "The expected variable [{$scope}:{$key}] was not put.");
+    }
+
+    /** @param  string  $type  template | workflow */
+    public function assertActivated(string $type, string $name): void
+    {
+        PHPUnit::assertContains(['type' => $type, 'name' => $name], $this->activated, "The [{$type}/{$name}] was not activated.");
+    }
+
+    /**
      * Cuerpos registrados por endpoint. `track` e `identify` incluyen los items de los lotes.
      *
      * @return list<array<string, mixed>>

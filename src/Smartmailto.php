@@ -229,7 +229,8 @@ class Smartmailto
     /**
      * F-008 (B3): crea o actualiza una plantilla por nombre. Idempotente (`result`: created | updated |
      * unchanged). Solo viaja lo que se pasa: sin `layout` el servidor conserva el actual y sin `kind` usa
-     * `marketing` al crear. Una plantilla nueva nace activa.
+     * `marketing` al crear. F-009: una plantilla nueva queda `draft` (se activa con activateTemplate());
+     * las referencias a variables fuera del catalogo vuelven como `warnings`.
      *
      * @return array<string, mixed>|null
      */
@@ -264,8 +265,9 @@ class Smartmailto
     }
 
     /**
-     * F-008 (B3): crea o actualiza un workflow. Nunca queda activo por API: se crea inactivo y si la
-     * definicion cambia se guarda inactivo (`requires_activation`); un admin lo activa en el panel.
+     * F-008 (B3): crea o actualiza un workflow. Guardar nunca lo activa: se crea sin activar y si la
+     * definicion cambia se guarda inactivo (`requires_activation`). F-009: se activa con
+     * activateWorkflow() (o en el panel), con las mismas validaciones.
      *
      * @param  string|array<string, mixed>  $definition  YAML/JSON en texto o la definicion como arreglo
      * @return array<string, mixed>|null
@@ -273,6 +275,140 @@ class Smartmailto
     public function putWorkflow(string $name, string|array $definition, string $format = 'yaml'): ?array
     {
         return $this->provision('workflows', $name, is_array($definition) ? ['definition' => $definition] : ['definition' => $definition, 'format' => $format]);
+    }
+
+    /**
+     * F-009: activa una plantilla. Exige cero referencias a variables inexistentes u obsoletas nuevas;
+     * si no, SmartmailtoException 422 `invalid_references` con `items()`.
+     *
+     * @return array<string, mixed>|null `{ result: activated|unchanged, status: active }`
+     */
+    public function activateTemplate(string $name): ?array
+    {
+        return $this->provisioning('post', 'templates/'.rawurlencode($name).'/activate');
+    }
+
+    /**
+     * F-009: activa un workflow. Revisa sus condiciones y todas sus plantillas (que deben estar activas);
+     * si no, SmartmailtoException 422 `invalid_references` con `items()` (incluye las plantillas).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function activateWorkflow(string $name): ?array
+    {
+        return $this->provisioning('post', 'workflows/'.rawurlencode($name).'/activate');
+    }
+
+    /**
+     * F-009 (RN-16): aplica un paquete completo en una sola peticion, todo o nada:
+     * `{ variables, partials, templates, workflows }` (cada item con su `name`, y las variables con
+     * `scope`, `key` y `event`). Con `activate` activa plantillas y workflows en la misma transaccion.
+     * Si algo falla no cambia nada (lo activo sigue enviando) y lanza SmartmailtoException 422
+     * `provision_failed` con todos los `items()` fallidos.
+     *
+     * @param  array<string, mixed>  $package
+     * @return array<string, mixed>|null `{ results, warnings }`
+     */
+    public function provisionPackage(array $package, bool $activate = false): ?array
+    {
+        return $this->provisioning('post', 'provision', [...$package, 'activate' => $activate]);
+    }
+
+    /**
+     * F-009: el mismo paquete que provisionPackage() en modo de prueba (no guarda nada). Responde 200
+     * aunque haya errores: revisa `valid` (`{ valid, errors, warnings, results }`).
+     *
+     * @param  array<string, mixed>  $package
+     * @return array<string, mixed>|null
+     */
+    public function validatePackage(array $package, bool $activate = false): ?array
+    {
+        return $this->provisioning('post', 'validate', [...$package, 'activate' => $activate]);
+    }
+
+    /**
+     * F-009: catalogo de variables del proyecto (sincrono). Filtra por seccion y por evento.
+     *
+     * @param  string|null  $scope  contact | event | secret
+     * @return list<array<string, mixed>>|null
+     */
+    public function variables(?string $scope = null, ?string $event = null): ?array
+    {
+        $query = http_build_query(array_filter(['scope' => $scope, 'event' => $event], fn ($value) => $value !== null));
+
+        $response = $this->provisioning('get', 'variables'.($query !== '' ? "?{$query}" : ''));
+
+        return $response === null ? null : ($response['data'] ?? []);
+    }
+
+    /**
+     * F-009: crea o actualiza una variable del catalogo (`result`: created | updated | unchanged, mas
+     * `warnings`). `$definition`: label, type, description, allowed_values, required, default, filterable,
+     * sensitive. `$event` solo en `event`/`secret` (null = comun). La marca `sensitive` por API solo se
+     * enciende: un `false` sobre una sensible la conserva con el aviso `sensitive_kept`.
+     *
+     * @param  array<string, mixed>  $definition
+     * @return array<string, mixed>|null
+     */
+    public function putVariable(string $scope, string $key, array $definition, ?string $event = null): ?array
+    {
+        return $this->provisioning('put', $this->variablePath($scope, $key, $event), $definition);
+    }
+
+    /**
+     * F-009: marca una variable como obsoleta: lo que ya la usa sigue funcionando, pero nada nuevo puede
+     * activarse con ella.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function obsoleteVariable(string $scope, string $key, ?string $event = null): ?array
+    {
+        return $this->provisioning('post', $this->variablePath($scope, $key, $event, '/obsolete'));
+    }
+
+    /**
+     * F-009: borra una variable sin usos. Con usos: SmartmailtoException 409 `in_use` con `usages()`.
+     * Devuelve false si no existia.
+     */
+    public function deleteVariable(string $scope, string $key, ?string $event = null): bool
+    {
+        if (! $this->enabled()) {
+            return false;
+        }
+
+        try {
+            $this->provisioning('delete', $this->variablePath($scope, $key, $event));
+
+            return true;
+        } catch (SmartmailtoException $e) {
+            if ($e->status === 404) {
+                return false;
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * F-009: donde se usa una variable (tipo, nombre y ubicacion).
+     *
+     * @return list<array<string, mixed>>|null
+     */
+    public function variableUsages(string $scope, string $key, ?string $event = null): ?array
+    {
+        $response = $this->provisioning('get', $this->variablePath($scope, $key, $event, '/usages'));
+
+        return $response === null ? null : ($response['usages'] ?? []);
+    }
+
+    /**
+     * F-009: esquema para agentes y herramientas (tipos de paso, operadores, reglas de plantilla y el
+     * catalogo con un fragmento JSON Schema por variable). Es la misma fuente que la ayuda del panel.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function schema(): ?array
+    {
+        return $this->provisioning('get', 'schema');
     }
 
     /**
@@ -312,6 +448,36 @@ class Smartmailto
         }
 
         return $this->app->make(SmartmailtoClient::class)->put($resource.'/'.rawurlencode($name), $body);
+    }
+
+    /**
+     * F-009: llamada sincrona de aprovisionamiento o catalogo (el fake la reemplaza sin red).
+     *
+     * @param  'get'|'post'|'put'|'delete'  $method
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>|null
+     */
+    protected function provisioning(string $method, string $path, array $body = []): ?array
+    {
+        if (! $this->enabled()) {
+            return null;
+        }
+
+        $client = $this->app->make(SmartmailtoClient::class)->withTimeout((int) $this->config('provision_timeout', 120));
+
+        return match ($method) {
+            'get' => $client->get($path),
+            'post' => $client->post($path, $body),
+            'put' => $client->put($path, $body),
+            'delete' => $client->delete($path),
+        };
+    }
+
+    /** `?event=` tambien en obsolete, delete y usages: sin el, una variable de evento no se encuentra. */
+    private function variablePath(string $scope, string $key, ?string $event, string $suffix = ''): string
+    {
+        return 'variables/'.rawurlencode($scope).'/'.rawurlencode($key).$suffix
+            .($event !== null ? '?'.http_build_query(['event' => $event]) : '');
     }
 
     /** @return array{user_id?: string, email?: string} */

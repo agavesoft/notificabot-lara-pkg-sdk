@@ -20,6 +20,12 @@ class SmartmailtoClient
         private readonly int $timeout = 10,
     ) {}
 
+    /** F-009: copia con otra espera (el aprovisionamiento tarda mas que la ingesta). */
+    public function withTimeout(int $seconds): self
+    {
+        return new self($this->http, $this->apiUrl, $this->apiToken, $seconds);
+    }
+
     public function isConfigured(): bool
     {
         return trim((string) $this->apiUrl) !== '' && trim((string) $this->apiToken) !== '';
@@ -100,6 +106,9 @@ class SmartmailtoClient
             throw SmartmailtoException::transient("Smartmailto error {$status} on {$path}.", $status);
         }
 
-        throw SmartmailtoException::rejected("Smartmailto rejected {$path} ({$status}).", $status, (array) $response->json());
+        $body = (array) $response->json();
+        $error = is_string($body['error'] ?? null) ? " {$body['error']}" : '';
+
+        throw SmartmailtoException::rejected("Smartmailto rejected {$path} ({$status}{$error}).", $status, $body);
     }
 }

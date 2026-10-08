@@ -274,3 +274,136 @@ test('aprovisionamiento apagado en el proyecto se rechaza sin reintento (F-008 B
         expect($e->transient)->toBeFalse()->and($e->status)->toBe(403)->and($e->response)->toBe(['error' => 'provisioning_disabled']);
     });
 });
+
+// ─── F-009: catalogo de variables, activacion y paquete atomico ─────────
+// Espejo de tests/Feature/F009/CatalogoTest.php del servidor.
+
+test('catalogo: variables, putVariable, obsoleteVariable, deleteVariable y variableUsages (F-009)', function () {
+    Http::fake([
+        'smartmailto.test/api/variables?*' => Http::response(['data' => [['scope' => 'event', 'key' => 'orden', 'event' => 'orden_creada']]], 200),
+        'smartmailto.test/api/variables/event/orden/usages*' => Http::response(['usages' => [['type' => 'template', 'name' => 'checkout-2', 'location' => 'body']]], 200),
+        'smartmailto.test/api/variables/event/orden/obsolete*' => Http::response(['result' => 'obsolete', 'status' => 'obsolete'], 200),
+        'smartmailto.test/api/variables/contact/plan' => Http::response(['result' => 'created', 'key' => 'plan', 'warnings' => []], 201),
+        'smartmailto.test/api/variables/event/orden?event=orden_creada' => Http::response(null, 204),
+    ]);
+
+    expect(Smartmailto::variables('event', 'orden_creada'))->toBe([['scope' => 'event', 'key' => 'orden', 'event' => 'orden_creada']])
+        ->and(Smartmailto::putVariable('contact', 'plan', ['type' => 'enum', 'allowed_values' => ['free', 'pro'], 'description' => 'Plan', 'filterable' => true]))
+        ->toBe(['result' => 'created', 'key' => 'plan', 'warnings' => []])
+        ->and(Smartmailto::obsoleteVariable('event', 'orden', 'orden_creada'))->toBe(['result' => 'obsolete', 'status' => 'obsolete'])
+        ->and(Smartmailto::variableUsages('event', 'orden', 'orden_creada'))->toBe([['type' => 'template', 'name' => 'checkout-2', 'location' => 'body']])
+        ->and(Smartmailto::deleteVariable('event', 'orden', 'orden_creada'))->toBeTrue();
+
+    Http::assertSent(fn (Request $request) => $request->method() === 'GET'
+        && $request->url() === 'https://smartmailto.test/api/variables?scope=event&event=orden_creada');
+    Http::assertSent(fn (Request $request) => $request->method() === 'PUT'
+        && $request->url() === 'https://smartmailto.test/api/variables/contact/plan'
+        && $request->data() === ['type' => 'enum', 'allowed_values' => ['free', 'pro'], 'description' => 'Plan', 'filterable' => true]);
+    // `?event=` en obsolete, usages y delete: sin el, una variable de evento da 404.
+    Http::assertSent(fn (Request $request) => $request->method() === 'POST'
+        && $request->url() === 'https://smartmailto.test/api/variables/event/orden/obsolete?event=orden_creada');
+    Http::assertSent(fn (Request $request) => $request->method() === 'GET'
+        && $request->url() === 'https://smartmailto.test/api/variables/event/orden/usages?event=orden_creada');
+    Http::assertSent(fn (Request $request) => $request->method() === 'DELETE'
+        && $request->url() === 'https://smartmailto.test/api/variables/event/orden?event=orden_creada');
+});
+
+test('una variable en uso no se borra: la excepcion expone usages (F-009 RN-2)', function () {
+    Http::fake([
+        'smartmailto.test/api/variables/contact/plan' => Http::response(['error' => 'in_use', 'usages' => [['type' => 'template', 'name' => 'bienvenida', 'location' => 'body']]], 409),
+        'smartmailto.test/api/variables/contact/nadie' => Http::response(['error' => 'not_found'], 404),
+    ]);
+
+    expect(fn () => Smartmailto::deleteVariable('contact', 'plan'))->toThrow(function (SmartmailtoException $e) {
+        expect($e->transient)->toBeFalse()
+            ->and($e->status)->toBe(409)
+            ->and($e->error())->toBe('in_use')
+            ->and($e->getMessage())->toContain('409 in_use')
+            ->and($e->usages())->toBe([['type' => 'template', 'name' => 'bienvenida', 'location' => 'body']])
+            ->and($e->items())->toBe([]);
+    });
+    expect(Smartmailto::deleteVariable('contact', 'nadie'))->toBeFalse();
+});
+
+test('activateTemplate y activateWorkflow; un rechazo expone items (F-009 RN-4)', function () {
+    Http::fake([
+        'smartmailto.test/api/templates/recibo/activate' => Http::response(['result' => 'activated', 'status' => 'active'], 200),
+        'smartmailto.test/api/workflows/checkout/activate' => Http::response(['error' => 'invalid_references', 'items' => [
+            ['type' => 'template', 'name' => 'checkout-2', 'code' => 'unknown_variable', 'ref' => 'data:totl', 'location' => 'body'],
+        ]], 422),
+    ]);
+
+    expect(Smartmailto::activateTemplate('recibo'))->toBe(['result' => 'activated', 'status' => 'active']);
+    expect(fn () => Smartmailto::activateWorkflow('checkout'))->toThrow(function (SmartmailtoException $e) {
+        expect($e->error())->toBe('invalid_references')
+            ->and($e->items())->toBe([['type' => 'template', 'name' => 'checkout-2', 'code' => 'unknown_variable', 'ref' => 'data:totl', 'location' => 'body']]);
+    });
+
+    Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->url() === 'https://smartmailto.test/api/templates/recibo/activate');
+});
+
+test('provisionPackage manda el paquete y activate; provision_failed expone items y warnings (F-009 RN-16)', function () {
+    $package = [
+        'variables' => [['scope' => 'event', 'key' => 'orden', 'event' => 'orden_creada', 'type' => 'string', 'description' => 'Folio']],
+        'templates' => [['name' => 'checkout-2', 'subject' => 'Tu orden', 'body' => 'Orden {{data:orden}}']],
+    ];
+    Http::fake(['smartmailto.test/api/provision' => Http::sequence()
+        ->push(['results' => [['type' => 'template', 'name' => 'checkout-2', 'result' => 'created', 'status' => 'draft']], 'warnings' => []], 200)
+        ->push(['error' => 'provision_failed', 'items' => [['type' => 'workflow', 'name' => 'checkout', 'code' => 'unknown_variable', 'ref' => 'data:no_existe']],
+            'warnings' => [['type' => 'variable', 'name' => 'contact:telefono', 'code' => 'sensitive_kept']]], 422),
+    ]);
+
+    expect(Smartmailto::provisionPackage($package)['results'][0]['status'])->toBe('draft');
+    expect(fn () => Smartmailto::provisionPackage($package, activate: true))->toThrow(function (SmartmailtoException $e) {
+        expect($e->error())->toBe('provision_failed')
+            ->and($e->items()[0]['ref'])->toBe('data:no_existe')
+            ->and($e->warnings()[0]['code'])->toBe('sensitive_kept');
+    });
+
+    Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->data() === [...$package, 'activate' => false]);
+    Http::assertSent(fn (Request $request) => $request->data() === [...$package, 'activate' => true]);
+});
+
+test('validatePackage devuelve valid=false sin lanzar y schema lee el esquema (F-009)', function () {
+    Http::fake([
+        'smartmailto.test/api/validate' => Http::response(['valid' => false, 'errors' => [['code' => 'unknown_variable']], 'warnings' => [], 'results' => []], 200),
+        'smartmailto.test/api/schema' => Http::response(['version' => '2026-10-08', 'variables' => ['contact' => []]], 200),
+    ]);
+
+    expect(Smartmailto::validatePackage(['templates' => [['name' => 'a', 'subject' => 's', 'body' => '{{contact:nombre}}']]], activate: true))
+        ->toMatchArray(['valid' => false, 'errors' => [['code' => 'unknown_variable']]])
+        ->and(Smartmailto::schema()['version'])->toBe('2026-10-08');
+
+    Http::assertSent(fn (Request $request) => $request->url() === 'https://smartmailto.test/api/validate' && $request->data()['activate'] === true);
+});
+
+test('con enabled=false el catalogo no sale a la red (F-009)', function () {
+    config(['smartmailto.enabled' => false]);
+    Http::fake();
+
+    expect(Smartmailto::variables())->toBeNull()
+        ->and(Smartmailto::putVariable('contact', 'plan', ['type' => 'string']))->toBeNull()
+        ->and(Smartmailto::deleteVariable('contact', 'plan'))->toBeFalse()
+        ->and(Smartmailto::provisionPackage([]))->toBeNull()
+        ->and(Smartmailto::schema())->toBeNull();
+
+    Http::assertNothingSent();
+});
+
+test('el fake registra catalogo, paquetes y activaciones sin red (F-009)', function () {
+    Http::fake();
+    $fake = Smartmailto::fake();
+    $fake->variablesResponse = [['scope' => 'contact', 'key' => 'plan'], ['scope' => 'event', 'key' => 'orden', 'event' => 'orden_creada']];
+
+    Smartmailto::putVariable('event', 'orden', ['type' => 'string', 'description' => 'Folio'], 'orden_creada');
+    Smartmailto::provisionPackage(['templates' => []], activate: true);
+    Smartmailto::validatePackage(['templates' => []]);
+    Smartmailto::activateWorkflow('checkout');
+
+    $fake->assertVariablePut('event', 'orden', fn (array $definition, ?string $event) => $event === 'orden_creada' && $definition['type'] === 'string');
+    $fake->assertPackageProvisioned(fn (array $package, bool $activate) => $activate);
+    $fake->assertActivated('workflow', 'checkout');
+    expect(Smartmailto::variables('contact'))->toBe([['scope' => 'contact', 'key' => 'plan']])
+        ->and($fake->packages)->toHaveCount(2);
+    Http::assertNothingSent();
+});

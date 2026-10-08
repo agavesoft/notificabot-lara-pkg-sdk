@@ -100,6 +100,9 @@ class SmartmailtoClient
             throw SmartmailtoException::transient("Smartmailto error {$status} on {$path}.", $status);
         }
 
-        throw SmartmailtoException::rejected("Smartmailto rejected {$path} ({$status}).", $status, (array) $response->json());
+        $body = (array) $response->json();
+        $error = is_string($body['error'] ?? null) ? " {$body['error']}" : '';
+
+        throw SmartmailtoException::rejected("Smartmailto rejected {$path} ({$status}{$error}).", $status, $body);
     }
 }

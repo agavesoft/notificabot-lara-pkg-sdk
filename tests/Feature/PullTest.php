@@ -131,6 +131,22 @@ test('updated_since llega al resolver y el limite se topa en max_limit', functio
         ->and($this->resolver->calls[0]['limit'])->toBe(500);
 });
 
+test('las fechas llegan al resolver en la zona de la app (el query builder no convierte zona)', function () {
+    $tz = date_default_timezone_get();
+    date_default_timezone_set('America/Mexico_City');
+
+    try {
+        $pull = Smartmailto::fakePull($this->resolver, catalog: []);
+        $first = $pull->contacts(CarbonImmutable::parse('2026-10-01T00:00:00Z'), limit: 1);
+        $pull->contacts(CarbonImmutable::parse('2026-10-01T00:00:00Z'), $first['next_cursor'], limit: 1);
+
+        expect($this->resolver->calls[0]['updated_since']->format('Y-m-d H:i:s'))->toBe('2026-09-30 18:00:00')
+            ->and($this->resolver->calls[1]['after']->updatedAt->format('Y-m-d H:i:s'))->toBe('2026-10-01 04:00:00');
+    } finally {
+        date_default_timezone_set($tz);
+    }
+});
+
 test('la lista deleted viaja con la pagina', function () {
     $this->resolver->deleted = [Identity::user(77), Identity::guest('x@example.com')];
     $pull = Smartmailto::fakePull($this->resolver, catalog: []);

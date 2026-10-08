@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.4.0 — sin publicar
+
+- F-011 (sincronizacion desde el proyecto: pull), compatible hacia atras. **Requiere un servidor con F-011**, y el pull se prende por proyecto en el panel. Con `SMARTMAILTO_PULL_ENABLED=false` (default) nada cambia: no se registra ninguna ruta.
+  - Ruta `POST {prefix}/smartmailto/pull` (prefijo `api`, nombre `smartmailto.pull`). Solo existe con `smartmailto.pull.enabled` y un resolver; si no, 404.
+    - Middleware `smartmailto.pull`: firma con `SMARTMAILTO_PULL_SECRET` (`pullsec_...`, propio y separado del webhook), ventana de 300 s y `X-Smartmailto-Request` de un solo uso.
+    - Throttle `120,1` y middleware extra configurables.
+  - La respuesta va firmada: `"{timestamp}.{request_id}.{cuerpo}"`.
+  - `Contracts\PullResolver` (`contact()`, `contacts()`), con `Pull\PullContact`, `PullEvent`, `PullPage` (con `deleted`) y `PullCursor`.
+    - El SDK arma y firma el cursor `(updatedAt, key)`.
+    - Las fechas llegan al resolver en la zona de la app.
+  - Datos minimos: los atributos se filtran contra las variables de contacto del catalogo (F-009).
+    - El catalogo se lee del servidor en cache 5 min, o se fija con `smartmailto.pull.catalog`.
+    - Si no se puede leer: 503 (Smartmailto reintenta).
+  - `smartmailto.pull.history_months` (`SMARTMAILTO_PULL_HISTORY_MONTHS`): `null` = toda la historia.
+  - La pagina se recorta a `pull.max_response_bytes` (5 MB) y el cursor sigue desde lo que cupo.
+  - `Smartmailto::fakePull($resolver, catalog: [...])` prueba el resolver por la ruta real sin red: `contact()`, `contacts()` y `assertPullContract()`.
+  - `identify(..., updatedAt:)` y `batch()->identify(..., updatedAt)`: hora del cambio en la app. Si push y pull traen el mismo atributo, gana el mas reciente (R-11).
+  - `composer.json`: `branch-alias` `dev-develop` → `2.4.x-dev`.
+
 ## v2.3.0 — sin publicar
 
 - F-009 (catalogo de variables por proyecto y control de usos), compatible hacia atras en la API PHP. **Requiere un servidor con F-009**: sin `POST /api/provision`, `smartmailto:provision` falla con 404 y no cambia nada.

@@ -212,7 +212,7 @@ class PullController
     {
         $months = config('smartmailto.pull.history_months');
 
-        return $months === null || $months === '' ? null : CarbonImmutable::now()->utc()->subMonths(max(0, (int) $months));
+        return $months === null || $months === '' ? null : CarbonImmutable::now()->subMonths(max(0, (int) $months));
     }
 
     private function json(mixed $value): string

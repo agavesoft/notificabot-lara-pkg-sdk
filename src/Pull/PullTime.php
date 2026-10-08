@@ -13,7 +13,10 @@ final class PullTime
         return CarbonImmutable::instance($time)->utc()->format('Y-m-d\TH:i:s\Z');
     }
 
-    /** null si no es una fecha valida. */
+    /**
+     * null si no es una fecha valida. Se entrega en la zona de la app (`app.timezone`): el query builder
+     * formatea las fechas sin convertir zona, asi el resolver puede compararlas directo con sus columnas.
+     */
     public static function parse(mixed $value): ?CarbonImmutable
     {
         if (! is_string($value) || trim($value) === '') {
@@ -21,7 +24,7 @@ final class PullTime
         }
 
         try {
-            return CarbonImmutable::parse($value)->utc();
+            return CarbonImmutable::parse($value)->setTimezone(date_default_timezone_get());
         } catch (\Throwable) {
             return null;
         }

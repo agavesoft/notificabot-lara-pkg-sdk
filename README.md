@@ -11,7 +11,7 @@ composer require agavesoft/smartmailto
 php artisan vendor:publish --tag=smartmailto-config   # opcional
 ```
 
-Antes de publicar una version, `develop` se puede requerir desde el repositorio como `2.3.x-dev` (`"agavesoft/smartmailto": "^2.3@dev"` con un repositorio `vcs` a `https://github.com/agavesoft/notificabot-lara-pkg-sdk`).
+Antes de publicar una version, `develop` se puede requerir desde el repositorio como `2.4.x-dev` (`"agavesoft/smartmailto": "^2.4@dev"` con un repositorio `vcs` a `https://github.com/agavesoft/notificabot-lara-pkg-sdk`).
 
 ```dotenv
 SMARTMAILTO_API_URL=https://smartmailto.example.com
@@ -24,6 +24,10 @@ SMARTMAILTO_ENABLED=true                 # false = el SDK no hace nada
 # SMARTMAILTO_ATTACHMENTS_MAX_FILES=10
 # SMARTMAILTO_ATTACHMENTS_MAX_BYTES=7340032
 # SMARTMAILTO_PROVISION_TIMEOUT=120      # espera del aprovisionamiento y el catalogo (F-009)
+# SMARTMAILTO_PULL_ENABLED=false         # pull: Smartmailto le pide datos a tu app (F-011)
+# SMARTMAILTO_PULL_SECRET=pullsec_...
+# SMARTMAILTO_PULL_RESOLVER=App\Smartmailto\MiPullResolver
+# SMARTMAILTO_PULL_HISTORY_MONTHS=       # vacio = toda la historia de eventos
 ```
 
 Por default **cada llamada se encola despues del commit** de la transaccion en curso: necesitas un worker de cola corriendo (`php artisan queue:work`). Con la cola `sync` la llamada se hace una sola vez al terminar el commit, sin reintentos; una falla dispara `SmartmailtoDeliveryFailed`. Para reintentos reales usa una cola de verdad (`database`, `redis`). Con `SMARTMAILTO_QUEUE=false` las llamadas son sincronas y lanzan `SmartmailtoException` si fallan.
@@ -41,7 +45,8 @@ Smartmailto::track('orden_creada', Identity::guest($order->email), [
    secrets: ['checkout_url' => $checkoutUrl]);
 
 // Persona con cuenta. Mandar su correo une su historial de invitado con la cuenta.
-Smartmailto::identify(Identity::user($user->id, $user->email), ['name' => $user->name]);
+// updatedAt (opcional, F-011): hora del cambio en tu app; si push y pull traen el mismo atributo, gana el mas reciente.
+Smartmailto::identify(Identity::user($user->id, $user->email), ['name' => $user->name], updatedAt: $user->updated_at);
 
 // Correo transaccional inmediato (idempotente).
 Smartmailto::send('recibo-compra', Identity::user($user->id, $user->email), [
@@ -286,6 +291,158 @@ $batch->dispatch();   // se parte en lotes de 100
 
 Volver a correr la carga es seguro: los `eventId` repetidos se descartan.
 
+Con el pull (siguiente seccion) la carga inicial la hace Smartmailto: no hace falta escribir este comando.
+
+### Pull: Smartmailto le pide datos a tu app (F-011)
+
+Con el modo `push+pull` del proyecto, Smartmailto llama a tu app para:
+
+- la **carga inicial**, que lanza un admin desde el panel; nunca corre sola;
+- la **reconciliacion** tras una caida;
+- la **resincronizacion nocturna**, apagada por default;
+- pedir **un contacto** cuando le falta un dato obligatorio para enviar.
+
+Lo que llega por pull **nunca dispara correos ni workflows**: los eventos se guardan como historicos (`source = pull`) y si cuentan para condiciones y filtros.
+
+**1. Implementa el resolver.** Lo que llega a Smartmailto se decide aqui:
+
+```php
+use Agavesoft\Smartmailto\Contracts\PullResolver;
+use Agavesoft\Smartmailto\Identity;
+use Agavesoft\Smartmailto\Pull\{PullContact, PullCursor, PullEvent, PullPage};
+use Carbon\CarbonInterface;
+
+class MiPullResolver implements PullResolver
+{
+    public function contact(Identity $identity, ?CarbonInterface $eventsSince): ?PullContact
+    {
+        $user = $identity->userId !== null ? User::find($identity->userId) : User::firstWhere('email', $identity->email);
+
+        return $user && $user->esContacto() ? $this->toContact($user, $eventsSince) : null;
+    }
+
+    public function contacts(?CarbonInterface $updatedSince, ?PullCursor $after, int $limit): PullPage
+    {
+        $users = User::query()->contactos()
+            ->when($updatedSince, fn ($q) => $q->where('updated_at', '>=', $updatedSince))
+            // Estrictamente despues del cursor, en el mismo orden (updated_at, id):
+            ->when($after, fn ($q) => $q->where(fn ($q) => $q->where('updated_at', '>', $after->updatedAt)
+                ->orWhere(fn ($q) => $q->where('updated_at', $after->updatedAt)->where('id', '>', $after->key))))
+            ->orderBy('updated_at')->orderBy('id')
+            ->limit($limit)->get();
+
+        return new PullPage($users->map(fn ($user) => $this->toContact($user, null))->all());
+    }
+
+    private function toContact(User $user, ?CarbonInterface $eventsSince): PullContact
+    {
+        return new PullContact(
+            Identity::user($user->id, $user->email),
+            updatedAt: $user->updated_at,
+            contactSince: $user->contacto_desde,          // tu regla de "desde cuando es contacto"
+            attributes: ['plan' => $user->plan, 'last_purchase_at' => $user->ultima_compra_at?->toIso8601String()],
+            events: $user->ordenesPagadas($eventsSince)->map(fn ($order) => new PullEvent(
+                "app:orden_pagada:{$order->id}",          // EL MISMO eventId que mandas por track()
+                'orden_pagada', $order->paid_at, ['total' => $order->total], ['order', $order->id],
+            ))->all(),
+            unsubscribed: $user->sin_correos,
+            key: $user->id,                               // desempate del cursor: la misma columna del orderBy
+        );
+    }
+}
+```
+
+**2. Configura.** El panel del proyecto (engrane → *Sincronizacion desde el proyecto*) muestra el secreto `pullsec_...` una sola vez y pide la URL de tu app: `https://tu-app/api/smartmailto/pull`.
+
+```dotenv
+SMARTMAILTO_PULL_ENABLED=true
+SMARTMAILTO_PULL_SECRET=pullsec_...
+SMARTMAILTO_PULL_RESOLVER=App\Smartmailto\MiPullResolver   # o enlaza Contracts\PullResolver en un provider
+```
+
+- La ruta `POST {prefix}/smartmailto/pull` (prefijo `api` por default, nombre `smartmailto.pull`) **solo existe** con el pull prendido y un resolver: si no, es 404. Se registra al arrancar la app: con `php artisan route:cache` regenera la cache al cambiar esto.
+- **Middleware extra:** `smartmailto.pull.route.middleware`, por ejemplo un interruptor propio. Va fuera del grupo `web`, sin CSRF.
+- **Throttle propio:** `smartmailto.pull.route.throttle`, default `120,1`. Smartmailto manda a lo mas 60/min de corridas y 60/min de un contacto.
+
+**3. Pruebalo sin red** contra el contrato:
+
+```php
+$pull = Smartmailto::fakePull(MiPullResolver::class, catalog: ['plan', 'last_purchase_at']);
+
+$pull->contact(Identity::user($user->id));   // el contacto tal como lo recibe Smartmailto (o null)
+$pull->assertPullContract(limit: 2);         // recorre todas las paginas: orden, cursor estable, eventos completos
+```
+
+`fakePull()` prende el pull con un secreto de prueba y pasa por la ruta real (firma, filtro, historia, cursor). Con `catalog` no consulta a Smartmailto.
+
+**Reglas:**
+
+1. **Misma identidad y mismo `eventId` que en el push.** Si el resolver arma `event_id` distintos a los de tu `track()`, la carga duplica eventos y las condiciones `events.X.count` cuentan doble.
+2. **Solo atributos del catalogo.** Antes de responder, el SDK descarta las llaves que no son variables de contacto del catalogo del proyecto (F-009).
+   - El catalogo se lee de Smartmailto y se guarda en cache 5 min (`pull.catalog_ttl`), o se fija con `smartmailto.pull.catalog` (lista de llaves).
+   - Si no se puede leer, la ruta responde 503 y Smartmailto reintenta: nunca se mandan atributos sin filtrar.
+   - Las `properties` de los eventos no se filtran.
+3. **Condiciones por atributo, no por evento.** El pull trae **estado**.
+   - Escribe las condiciones de tus workflows sobre atributos (`contact.attributes.last_purchase_at`), no sobre "llego el evento X".
+   - Las condiciones de compra **deben** usar `last_purchase_at`: los eventos de mas de 13 meses ya no estan en Smartmailto, y alguien que compro hace 14 meses no es "nunca compro".
+4. **Historia.** `history_months` (`SMARTMAILTO_PULL_HISTORY_MONTHS`) limita los eventos que se mandan; vacio = toda.
+   - El SDK no topa la historia: Smartmailto descarta lo que este fuera de su retencion de eventos.
+   - `contact()` recibe `eventsSince` ya calculado. En `contacts()` el SDK filtra los eventos despues.
+5. **Orden y cursor.** `contacts()` devuelve en orden `(updatedAt, key)` y estrictamente despues de `$after`.
+   - El SDK arma el cursor desde el ultimo contacto y lo firma con el secreto del pull.
+   - Rotar el secreto invalida los cursores guardados: una corrida fallida tiene que empezar de cero.
+   - Si `updatedAt` retrocede dentro de una pagina, la ruta responde 500 en vez de saltarse contactos.
+6. **Quien es contacto lo decides tu.** `contactSince` es tu regla; sin ella, Smartmailto usa la fecha en que lo conocio. No devuelvas destinatarios externos, por ejemplo receptores de un CFDI.
+7. **Bajas y borrados.**
+   - `unsubscribed: true` llega como baja y el pull nunca la quita.
+   - `PullPage` acepta `deleted: [Identity, ...]`: personas borradas en tu app, que Smartmailto deja inactivas sin borrarlas.
+   - El borrado ARCO va siempre por `Smartmailto::forget()`, y un contacto borrado por ARCO no se recrea por pull.
+
+**Contrato v1** (para implementarlo a mano en apps no Laravel). Smartmailto hace `POST` con cuerpo JSON:
+
+```jsonc
+// Un contacto
+{ "version": 1, "op": "contact", "project_id": 12,
+  "identity": { "user_id": "123" } | { "email": "a@b.mx" },
+  "include": ["attributes", "events"], "events_since": null }
+
+// Pagina (updated_since null = carga inicial; limit default 200, max 500)
+{ "version": 1, "op": "contacts", "project_id": 12,
+  "updated_since": "2026-10-07T03:00:00Z" | null, "cursor": "opaco" | null, "limit": 200,
+  "include": ["attributes", "events"] }
+```
+
+| Header de la peticion | Valor |
+|---|---|
+| `User-Agent` | `Smartmailto-Pull/1` |
+| `X-Smartmailto-Timestamp` | segundos Unix |
+| `X-Smartmailto-Request` | uuid nuevo en cada intento |
+| `X-Smartmailto-Signature` | `sha256=` + HMAC-SHA256 hex de `"{timestamp}.{cuerpo}"` con el secreto del pull |
+
+Respuesta `200` con `X-Smartmailto-Timestamp` y `X-Smartmailto-Signature` = `sha256=` + HMAC-SHA256 hex de `"{timestamp}.{X-Smartmailto-Request}.{cuerpo}"`. Smartmailto descarta la pagina si la firma no coincide.
+
+```jsonc
+{ "version": 1,
+  "contacts": [ { "user_id": "123", "email": "a@b.mx",
+      "contact_since": "2024-03-01T10:00:00Z", "updated_at": "2026-10-07T21:10:00Z", "unsubscribed": false,
+      "attributes": { "last_purchase_at": "2026-09-30" },
+      "events": [ { "event_id": "ff:orden_pagada:991", "event": "orden_pagada", "occurred_at": "2026-09-30T10:00:00Z",
+                    "properties": { "total": 100 }, "object": { "type": "order", "id": "991" } } ] } ],
+  "deleted": [ { "user_id": "77" } ],
+  "next_cursor": "opaco" | null }
+```
+
+- **Contacto no encontrado:** `contacts: []`, no es error.
+- **Rechazos definitivos:**
+  - `401`: firma invalida, timestamp a mas de 300 s o `X-Smartmailto-Request` repetido;
+  - `404`: pull apagado o sin resolver;
+  - `422`: version, `op`, identidad, fecha, `limit` o cursor invalidos.
+- **Se reintentan:**
+  - `503`: sin secreto o sin catalogo;
+  - `5xx`: falla del resolver;
+  - `429`.
+- La respuesta no debe pasar de 5 MB. El SDK recorta la pagina a `pull.max_response_bytes` y el cursor sigue desde el ultimo contacto que cupo. Si un solo contacto no cabe, responde 500: baja `history_months`.
+
 ### Fallas
 
 - Se reintenta solo lo transitorio (red, 5xx, 429 respetando `Retry-After`) con espera de 30 s, 2 min, 10 min y despues cada hora, hasta 24 h.
@@ -322,6 +479,8 @@ $fake->assertActivated('workflow', 'checkout');
 ```
 
 El fake no sale a la red. Sus respuestas se ajustan con `provisionResponse`, `validateResponse`, `variablesResponse`, `usagesResponse`, `deleteResponse` y `schemaResponse`.
+
+Para probar tu resolver del pull, usa `Smartmailto::fakePull()` (ver [Pull](#pull-smartmailto-le-pide-datos-a-tu-app-f-011)). Funciona junto con `fake()`: sin `catalog`, toma las variables de contacto de `variablesResponse`.
 
 ## Contrato de eventos de Factura Facilita
 

@@ -20,7 +20,7 @@ final class PullCursor
 
     public static function after(PullContact $contact): self
     {
-        return new self(CarbonImmutable::instance($contact->updatedAt)->utc(), $contact->cursorKey());
+        return new self(CarbonImmutable::instance($contact->updatedAt), $contact->cursorKey());
     }
 
     public function encode(string $secret): string

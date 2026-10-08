@@ -18,7 +18,7 @@ Registro de conocimiento pendiente de sincronizar al repo de conocimiento.
 
 - `docs/pending/F011-decisiones.md` (2026-10-08) — registro de la ruta, firma y anti-replay, cursor, orden, zona horaria, filtro por catalogo, historia, limite de respuesta, `identify(updatedAt)`, v2.4.0
 - `docs/pending/F011-edge-cases.md` (2026-10-08) — route:cache, rotacion con corrida fallida, empates, cache del catalogo, store `array`
-- `docs/pending/F011-progreso.md` (2026-10-08) — progreso (lo absorbe el cierre)
+- `docs/pending/F011-cierre.md` (2026-10-08) — marcador de cierre del componente SDK (absorbe el progreso)
 
 ## Hallazgos sin feature
 

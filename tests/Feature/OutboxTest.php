@@ -16,6 +16,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -653,6 +654,24 @@ test('outbox:retry no reintenta un send failed (ya paso a la emergencia)', funct
     $this->artisan('smartmailto:outbox:retry', ['--failed' => true])->expectsOutputToContain('1 send failed no se reintentan')->assertSuccessful();
 
     expect(obRows()->pluck('status', 'kind')->all())->toBe(['track' => 'pending', 'send' => 'failed']);
+});
+
+test('un listener sincrono que truena no corta la pasada del worker', function () {
+    obServer(fn (string $path, Request $request) => match (true) {
+        $path === 'send' => Http::response(['error' => 'missing_variables'], 422),
+        $request->method() === 'GET' => Http::response(['idempotency_key' => 'k', 'status' => 'not_found', 'sent_at' => null], 404),
+        default => obAcking()($path, $request),
+    });
+    Event::listen(SmartmailtoOutboxFailed::class, fn () => throw new RuntimeException('SES caido'));
+    Log::spy();
+
+    obSend();
+    obTrack();
+    obWork();
+
+    expect(obRows()->pluck('status', 'kind')->all())->toBe(['send' => 'failed', 'track' => 'acked'])
+        ->and(obMails())->toBe(['[FF] 1 rechazo(s) definitivo(s) de recibo']);
+    Log::shouldHaveReceived('error')->withArgs(fn (string $message) => str_contains($message, 'send ff:recibo:555 (422)'))->once();
 });
 
 test('fromDisk rechaza al llamar un disco sin URLs temporales', function () {

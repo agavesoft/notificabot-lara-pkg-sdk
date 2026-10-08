@@ -204,16 +204,21 @@ class OutboxWorker
             $this->alerts->rejected($row->template ?? $row->kind, $row->kind, $row->key, $error);
         }
 
-        // Despues del UPDATE: un listener en cola ve el estado ya cerrado.
-        $this->app->make('events')->dispatch(new SmartmailtoOutboxFailed(
-            outboxId: (int) $row->id,
-            kind: $row->kind,
-            key: $row->key,
-            reason: $reason,
-            template: $row->template,
-            status: $e?->status,
-            error: $e?->error(),
-        ));
+        // Despues del UPDATE: un listener en cola ve el estado ya cerrado. Un listener sincrono que truena
+        // no corta la pasada (las demas filas y las alertas siguen); queda en el log con la llave.
+        try {
+            $this->app->make('events')->dispatch(new SmartmailtoOutboxFailed(
+                outboxId: (int) $row->id,
+                kind: $row->kind,
+                key: $row->key,
+                reason: $reason,
+                template: $row->template,
+                status: $e?->status,
+                error: $e?->error(),
+            ));
+        } catch (Throwable $listenerError) {
+            $this->app->make('log')->error("Smartmailto outbox: SmartmailtoOutboxFailed listener failed for {$row->kind} {$row->key} ({$reason}): ".class_basename($listenerError).'. Use a queued listener (ShouldQueue) so the emergency is retried.');
+        }
 
         return 'closed';
     }

@@ -96,20 +96,26 @@ Smartmailto::send('recibo-compra', Identity::user($user->id, $user->email), $dat
 
 En los dos casos tu app manda el correo por su canal directo, lo registra (FF: `correos_salientes`) y lo **reporta**:
 
+El listener **debe ir en cola** (`implements ShouldQueue`): el evento se dispara una sola vez, y si un listener sincrono falla (SES caido, bug) el worker solo lo registra en el log y esa emergencia se pierde. En cola, la cola lo reintenta.
+
 ```php
-// app/Listeners/SmartmailtoEmergencia.php (en cola)
-public function handle(SmartmailtoOutboxFailed $event): void
+// app/Listeners/SmartmailtoEmergencia.php
+class SmartmailtoEmergencia implements ShouldQueue
 {
-    if (! $event->needsEmergencySend()) {
-        return;   // track/identify/link: no hay correo que mandar; soporte revisa con el runbook
+    public function handle(SmartmailtoOutboxFailed $event): void
+    {
+        if (! $event->needsEmergencySend()) {
+            return;   // track/identify/link: no hay correo que mandar; soporte revisa con el runbook
+        }
+
+        // Idempotente por la llave: si la cola reintenta el listener, el correo no sale dos veces.
+        $salida = CorreoSaliente::firstWhere('idempotency_key', $event->key)
+            ?? CorreoSaliente::mandarPorSes($event->key);   // tu app sabe armar el correo de esa llave
+
+        // Smartmailto lo registra como "enviado por emergencia desde el proyecto" y ya no lo manda aunque
+        // le llegue despues. Si la fila esta en vuelo lanza OutboxRowInFlight: deja que la cola reintente.
+        Smartmailto::reportExternalSend($event->key, sentAt: $salida->sent_at, reason: $event->reason);
     }
-
-    $correo = CorreoEsencial::porLlave($event->key);   // tu app sabe armar el correo de esa llave
-    Ses::mandar($correo);
-
-    // Smartmailto lo registra como "enviado por emergencia desde el proyecto" y ya no lo manda aunque
-    // le llegue despues. Si la fila esta en vuelo lanza OutboxRowInFlight: deja que la cola reintente.
-    Smartmailto::reportExternalSend($event->key, sentAt: now(), reason: $event->reason);
 }
 ```
 

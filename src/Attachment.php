@@ -68,6 +68,10 @@ final class Attachment
     public static function fromDisk(string $disk, string $path, ?string $filename = null, ?string $contentType = null): self
     {
         $storage = app('filesystem')->disk($disk);
+        // Al llamar, no en el worker: un disco sin URLs temporales fallaria cada intento hasta vencer.
+        if (method_exists($storage, 'providesTemporaryUrls') && ! $storage->providesTemporaryUrls()) {
+            throw new InvalidArgumentException("Smartmailto attachment disk {$disk} cannot create temporary URLs (use S3 or a disk with temporaryUrl).");
+        }
         if (! $storage->exists($path)) {
             throw new InvalidArgumentException("Smartmailto attachment not found on disk {$disk}: {$path}");
         }

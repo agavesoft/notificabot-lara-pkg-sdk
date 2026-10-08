@@ -2,6 +2,7 @@
 
 namespace Agavesoft\Smartmailto\Outbox;
 
+use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Http\Client\Factory as HttpFactory;
@@ -33,19 +34,32 @@ class OutboxAlerts
     public function rejected(string $group, string $kind, string $key, string $error): void
     {
         $type = mb_substr('rejected:'.$group, 0, 191);
-        $state = $this->state($type);
+        if ($this->outbox->alertTable()->where('type', $type)->doesntExist()) {
+            $this->save($type, ['count' => 0]);
+        }
 
-        $this->save($type, [
-            'count' => $state->count + 1,
-            'opened_at' => $state->opened_at ?? now(),
+        // Atomico: dos workers que rechazan a la vez no pierden un conteo.
+        $this->outbox->alertTable()->where('type', $type)->increment('count', 1, [
             'context' => json_encode(['kind' => $kind, 'key' => $key, 'error' => $error]),
+            'updated_at' => now(),
         ]);
     }
 
+    /** Con varios workers, solo uno evalua a la vez (si el store de cache tiene candados): sin avisos dobles. */
     public function evaluate(): void
     {
-        $this->flushRejected();
-        $this->unacked();
+        $store = $this->app->make('cache')->store()->getStore();
+        if (! $store instanceof LockProvider) {
+            $this->flushRejected();
+            $this->unacked();
+
+            return;
+        }
+
+        $store->lock('smartmailto:outbox:alerts', 120)->get(function () {
+            $this->flushRejected();
+            $this->unacked();
+        });
     }
 
     private function flushRejected(): void
@@ -68,7 +82,12 @@ class OutboxAlerts
             ]);
 
             if ($sent) {
-                $this->save($state->type, ['count' => 0, 'opened_at' => null, 'last_alert_at' => now(), 'window_ends_at' => now()->addMinutes($window)]);
+                // Resta lo avisado (no pone 0): un rechazo que llego durante el envio queda para la ventana.
+                $this->outbox->alertTable()->where('type', $state->type)->decrement('count', $state->count, [
+                    'last_alert_at' => now(),
+                    'window_ends_at' => now()->addMinutes($window),
+                    'updated_at' => now(),
+                ]);
             }
         }
     }
@@ -233,6 +252,6 @@ class OutboxAlerts
     /** @param  array<string, mixed>  $values */
     private function save(string $type, array $values): void
     {
-        $this->outbox->alertTable()->updateOrInsert(['type' => $type], [...$values, 'updated_at' => now()]);
+        $this->outbox->saveAlertState($type, $values);
     }
 }

@@ -171,7 +171,7 @@ DB::transaction(function () use ($order) {
 - **Hora real:** un `track` sin `occurredAt` guarda la hora del commit; los workflows cuentan desde ahi aunque el evento llegue horas despues.
 - **Aviso de vida:** cada 5 min el worker hace `POST /api/outbox/heartbeat`. Smartmailto alerta (con su propio canal) si el worker pasa 30 min sin avisar.
 - **Cifrado:** el payload de cada fila va cifrado con `APP_KEY`. Rotar la llave con filas pendientes las deja sin poder leerse (se reintentan y alertan por antiguedad): vacia el outbox antes de rotarla.
-- `smartmailto:outbox:status` (conteos, la mas vieja, alertas abiertas), `smartmailto:outbox:retry {id*} --key= --failed`, `smartmailto:outbox:prune` (acked 7 dias; failed, expired y superseded 30 dias) y `smartmailto:outbox:prune --contact=correo|user_id` (ARCO: borra las filas de esa persona).
+- `smartmailto:outbox:status` (conteos, la mas vieja, alertas abiertas), `smartmailto:outbox:retry {id*} --key= --failed` (nunca un `send`: al fallar ya paso a tu emergencia), `smartmailto:outbox:prune` (acked 7 dias; failed, expired y superseded 30 dias) y `smartmailto:outbox:prune --contact=correo|user_id` (ARCO: borra las filas de esa persona).
 - `batch()` (carga inicial) no usa el outbox: sigue por la cola; un lote se puede repetir sin riesgo.
 
 **Alertas (las emite tu app, agrupadas, nunca una por fila):**

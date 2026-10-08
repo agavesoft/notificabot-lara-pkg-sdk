@@ -631,3 +631,33 @@ test('con el outbox apagado todo sigue igual (cola despues del commit)', functio
 
     expect(obRows())->toHaveCount(0)->and(obPosts('track'))->toHaveCount(1)->and(obPosts('send'))->toHaveCount(1);
 });
+
+test('prune --contact respeta mayusculas del user_id, encuentra cc y no borra filas en vuelo', function () {
+    Smartmailto::identify(Identity::user('01HZXABC', 'x@example.com'));
+    Smartmailto::send('recibo', Identity::user(7, 'a@example.com'), [], 'ff:recibo:1', now()->addHour(), cc: ['Contador@Example.com']);
+    Smartmailto::send('recibo', Identity::user(8, 'contador@example.com'), [], 'ff:recibo:2', now()->addHour());
+    app(Outbox::class)->table()->where('key', 'ff:recibo:2')->update(['status' => 'sending']);
+
+    $this->artisan('smartmailto:outbox:prune', ['--contact' => '01HZXABC'])->expectsOutputToContain('1 fila(s)')->assertSuccessful();
+    $this->artisan('smartmailto:outbox:prune', ['--contact' => 'contador@example.com'])
+        ->expectsOutputToContain('1 fila(s) de la persona')->expectsOutputToContain('en vuelo')->assertFailed();
+
+    expect(obRows()->pluck('key')->all())->toBe(['ff:recibo:2']);
+});
+
+test('outbox:retry no reintenta un send failed (ya paso a la emergencia)', function () {
+    obTrack();
+    obSend();
+    app(Outbox::class)->table()->update(['status' => 'failed']);
+
+    $this->artisan('smartmailto:outbox:retry', ['--failed' => true])->expectsOutputToContain('1 send failed no se reintentan')->assertSuccessful();
+
+    expect(obRows()->pluck('status', 'kind')->all())->toBe(['track' => 'pending', 'send' => 'failed']);
+});
+
+test('fromDisk rechaza al llamar un disco sin URLs temporales', function () {
+    config(['filesystems.disks.privado' => ['driver' => 'local', 'root' => sys_get_temp_dir().'/smartmailto-privado']]);
+    Storage::disk('privado')->put('a.pdf', OB_PDF);
+
+    expect(fn () => Attachment::fromDisk('privado', 'a.pdf'))->toThrow(InvalidArgumentException::class, 'temporary URLs');
+});

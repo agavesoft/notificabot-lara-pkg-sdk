@@ -8,6 +8,7 @@ use DateTimeInterface;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -183,6 +184,23 @@ class Outbox
     public function alertTable(): Builder
     {
         return $this->connection()->table((string) $this->config('alert_table', 'smartmailto_outbox_alert_state'));
+    }
+
+    /**
+     * Guarda el estado de una alerta (o del heartbeat). Dos workers que crean la misma fila a la vez: el
+     * segundo choca con la llave unica y actualiza.
+     *
+     * @param  array<string, mixed>  $values
+     */
+    public function saveAlertState(string $type, array $values): void
+    {
+        $values['updated_at'] = now();
+
+        try {
+            $this->alertTable()->updateOrInsert(['type' => $type], $values);
+        } catch (UniqueConstraintViolationException) {
+            $this->alertTable()->where('type', $type)->update($values);
+        }
     }
 
     public function connection(): ConnectionInterface

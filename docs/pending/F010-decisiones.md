@@ -143,5 +143,15 @@ se implementan tal cual (decision de Jose 2026-10-08 14:02).
 - **S31. v2.5.0 sin publicar** (sin tag ni release), `branch-alias` `2.5.x-dev`. Se declaran
   `illuminate/database`, `illuminate/encryption`, `illuminate/filesystem` e `illuminate/mail` (Testbench
   escondia su ausencia). `(respuesta pre-dada)`
+- **S33. Ajustes del `/code-review`:** (a) `prune --contact` compara el `user_id` tal cual (solo el correo
+  en minusculas), busca tambien en `to`/`cc`/`bcc`, salta filas que no se descifran y reporta las en vuelo
+  y las ilegibles (sale con codigo 1) en vez de abortar. (b) La evaluacion de alertas corre bajo un
+  candado de cache (`smartmailto:outbox:alerts`) si el store lo soporta: con varios workers no salen
+  avisos dobles. (c) El estado de alertas se guarda con `updateOrInsert` y, si dos workers crean la misma
+  fila, el segundo actualiza; el conteo de rechazos es atomico (`increment`/`decrement`). (d)
+  `outbox:retry` nunca reintenta un `send` failed: ya disparo la emergencia y reintentarlo podria mandar
+  el correo dos veces. (e) `fromDisk` falla al llamar si el disco no da URLs temporales. (f) Las
+  estadisticas del worker cuentan como acuse un cierre que la consulta resolvio. Se queda como decision:
+  `batch()` sigue por la cola (S19) y el default de `alerts.mail_to` (S32). `(respuesta pre-dada)`
 - **S32. `alerts.mail_to` default `soporte@agavesoft.com.mx`** como dice el analisis (J2), aunque el paquete
   es publico (MIT): otra app debe cambiarlo. Queda como pregunta para Jose. `(respuesta pre-dada)`

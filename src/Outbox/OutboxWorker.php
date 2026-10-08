@@ -49,8 +49,7 @@ class OutboxWorker
         foreach ($this->outbox->table()->where('kind', 'send')->where('status', Outbox::PENDING)
             ->whereNotNull('send_before')->where('send_before', '<=', now())->orderBy('id')->get() as $row) {
             if ($this->claim($row)) {
-                $this->close($row, Outbox::EXPIRED, 'expired');
-                $stats['closed']++;
+                $stats[$this->close($row, Outbox::EXPIRED, 'expired')]++;
             }
         }
 
@@ -58,8 +57,7 @@ class OutboxWorker
         foreach ($this->outbox->table()->where('status', Outbox::PENDING)->whereNotNull('first_attempt_at')
             ->where('first_attempt_at', '<=', $giveUp)->orderBy('id')->get() as $row) {
             if ($this->claim($row)) {
-                $this->close($row, Outbox::FAILED, 'gave_up');
-                $stats['closed']++;
+                $stats[$this->close($row, Outbox::FAILED, 'gave_up')]++;
             }
         }
 
@@ -281,7 +279,7 @@ class OutboxWorker
             return;
         }
 
-        $this->outbox->alertTable()->updateOrInsert(['type' => 'heartbeat'], ['last_alert_at' => now(), 'updated_at' => now(), 'created_at' => $state?->created_at ?? now()]);
+        $this->outbox->saveAlertState('heartbeat', ['last_alert_at' => now()]);
     }
 
     private function client(): SmartmailtoClient

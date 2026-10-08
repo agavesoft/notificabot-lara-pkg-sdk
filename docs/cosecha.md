@@ -12,7 +12,7 @@ Registro de conocimiento pendiente de sincronizar al repo de conocimiento.
 
 - `docs/pending/F009-decisiones.md` (2026-10-08) — formato `variables/`, validacion solo estructural, paquete unico, metodos, excepcion, `symfony/yaml`
 - `docs/pending/F009-edge-cases.md` (2026-10-08) — fechas YAML, orden de bloques, servidor sin F-009, `validate` 200 invalido, `?event=`
-- `docs/pending/F009-progreso.md` (2026-10-08) — handoff (lo absorbe agave-cerrar)
+- `docs/pending/F009-cierre.md` (2026-10-08) — marcador de cierre del componente SDK (absorbe el progreso)
 
 ## Hallazgos sin feature
 

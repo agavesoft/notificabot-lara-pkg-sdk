@@ -11,7 +11,8 @@ composer require agavesoft/smartmailto
 php artisan vendor:publish --tag=smartmailto-config   # opcional
 ```
 
-Antes de publicar una version, `develop` se puede requerir desde el repositorio como `2.5.x-dev` (`"agavesoft/smartmailto": "^2.5@dev"` con un repositorio `vcs` a `https://github.com/agavesoft/notificabot-lara-pkg-sdk`).
+Version recomendada: `"agavesoft/smartmailto": "^2.5"` (tag estable), con un repositorio `vcs` a `https://github.com/agavesoft/notificabot-lara-pkg-sdk` mientras el paquete no este en Packagist.
+`^2.5@dev` (develop como `2.5.x-dev`) solo es para probar lo que aun no se publica.
 
 ```dotenv
 SMARTMAILTO_API_URL=https://smartmailto.example.com

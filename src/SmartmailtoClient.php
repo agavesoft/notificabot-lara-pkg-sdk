@@ -20,6 +20,12 @@ class SmartmailtoClient
         private readonly int $timeout = 10,
     ) {}
 
+    /** F-009: copia con otra espera (el aprovisionamiento tarda mas que la ingesta). */
+    public function withTimeout(int $seconds): self
+    {
+        return new self($this->http, $this->apiUrl, $this->apiToken, $seconds);
+    }
+
     public function isConfigured(): bool
     {
         return trim((string) $this->apiUrl) !== '' && trim((string) $this->apiToken) !== '';
@@ -34,10 +40,25 @@ class SmartmailtoClient
         return $this->request('post', $path, $body, $headers);
     }
 
+    /**
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>
+     */
+    public function put(string $path, array $body): array
+    {
+        return $this->request('put', $path, $body);
+    }
+
     /** @return array<string, mixed> */
     public function get(string $path): array
     {
         return $this->request('get', $path);
+    }
+
+    /** @return array<string, mixed> */
+    public function delete(string $path): array
+    {
+        return $this->request('delete', $path);
     }
 
     /**
@@ -58,7 +79,7 @@ class SmartmailtoClient
                 ->withHeaders(['User-Agent' => 'agavesoft-smartmailto-php/2', ...$headers])
                 ->acceptJson()
                 ->timeout($this->timeout)
-                ->{$method}($url, $method === 'get' ? null : $body);
+                ->{$method}($url, in_array($method, ['post', 'put'], true) ? $body : null);
         } catch (ConnectionException $e) {
             throw SmartmailtoException::transient('Could not reach Smartmailto: '.$e->getMessage(), previous: $e);
         }
@@ -85,6 +106,9 @@ class SmartmailtoClient
             throw SmartmailtoException::transient("Smartmailto error {$status} on {$path}.", $status);
         }
 
-        throw SmartmailtoException::rejected("Smartmailto rejected {$path} ({$status}).", $status, (array) $response->json());
+        $body = (array) $response->json();
+        $error = is_string($body['error'] ?? null) ? " {$body['error']}" : '';
+
+        throw SmartmailtoException::rejected("Smartmailto rejected {$path} ({$status}{$error}).", $status, $body);
     }
 }

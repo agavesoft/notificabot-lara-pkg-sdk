@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.5.0 — sin publicar
+## v2.5.0 — 2026-10-08
 
 - F-010 (eventos garantizados), compatible hacia atras: el outbox viene **apagado** (`SMARTMAILTO_OUTBOX_ENABLED=false`) y sin el todo sigue igual. **Requiere un servidor con F-010** (acuse con llave, `GET /api/send/{key}`, `POST /api/send/external`, `POST /api/outbox/heartbeat`, `POST /api/contacts/link`).
   - **Outbox transaccional:** primera migracion que publica el paquete (`--tag=smartmailto-migrations`): `smartmailto_outbox` y `smartmailto_outbox_alert_state`.
@@ -27,7 +27,7 @@
   - README: regla 4 por canal (R1) y guia de emergencia sin duplicados. Ya no recomienda mandar directo por `health()`.
   - Dependencias declaradas: `illuminate/database`, `illuminate/encryption`, `illuminate/filesystem` e `illuminate/mail`. `composer.json`: `branch-alias` `dev-develop` → `2.5.x-dev`.
 
-## v2.4.0 — sin publicar
+## v2.4.0 — no publicada por separado (incluida en v2.5.0, 2026-10-08)
 
 - F-011 (sincronizacion desde el proyecto: pull), compatible hacia atras. **Requiere un servidor con F-011**, y el pull se prende por proyecto en el panel. Con `SMARTMAILTO_PULL_ENABLED=false` (default) nada cambia: no se registra ninguna ruta.
   - Ruta `POST {prefix}/smartmailto/pull` (prefijo `api`, nombre `smartmailto.pull`). Solo existe con `smartmailto.pull.enabled` y un resolver; si no, 404.
@@ -46,7 +46,7 @@
   - `identify(..., updatedAt:)` y `batch()->identify(..., updatedAt)`: hora del cambio en la app. Si push y pull traen el mismo atributo, gana el mas reciente (R-11).
   - `composer.json`: `branch-alias` `dev-develop` → `2.4.x-dev`.
 
-## v2.3.0 — sin publicar
+## v2.3.0 — no publicada por separado (incluida en v2.5.0, 2026-10-08)
 
 - F-009 (catalogo de variables por proyecto y control de usos), compatible hacia atras en la API PHP. **Requiere un servidor con F-009**: sin `POST /api/provision`, `smartmailto:provision` falla con 404 y no cambia nada.
   - Catalogo: `variables($scope?, $event?)`, `putVariable($scope, $key, $definition, $event?)`, `obsoleteVariable()`, `deleteVariable()` (false si no existia), `variableUsages()` y `schema()` (esquema para agentes).
@@ -62,7 +62,7 @@
     - un timeout, que pudo aplicarse (repetirlo es seguro).
   - Dependencia nueva: `symfony/yaml` (`^7.2|^8.0`). `composer.json`: `branch-alias` `dev-develop` → `2.3.x-dev`.
 
-## v2.2.0 — sin publicar
+## v2.2.0 — no publicada por separado (incluida en v2.5.0, 2026-10-08)
 
 - F-008 (envio completo de Factura Facilita), compatible hacia atras:
   - `send()` acepta con nombre `attachments` (`Attachment::fromPath/fromData/fromUpload`, `UploadedFile` o ruta; base64 y `content_type` por extension), `to`, `cc`, `bcc`, `replyTo`, `from` y `secrets`. Limites del servidor (10 archivos, 7 MB) validados antes de encolar; configurables con `smartmailto.attachments`.

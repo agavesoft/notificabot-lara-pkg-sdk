@@ -15,8 +15,8 @@ Version recomendada: `"agavesoft/smartmailto": "^2.5"` (tag estable), con un rep
 `^2.5@dev` (develop como `2.5.x-dev`) solo es para probar lo que aun no se publica.
 
 ```dotenv
-SMARTMAILTO_API_URL=https://smartmailto.example.com
-SMARTMAILTO_API_TOKEN=mf_live_...        # token del proyecto (se muestra una sola vez en el panel)
+SMARTMAILTO_API_URL=https://smartmailto-dev.agv.dev   # sin /api: el SDK lo agrega
+SMARTMAILTO_API_TOKEN=mf_dev_...         # API key del proyecto (Conectar tu app; se muestra una sola vez)
 SMARTMAILTO_ENABLED=true                 # false = el SDK no hace nada
 # SMARTMAILTO_QUEUE=true                 # default: encola tras el commit y reintenta
 # SMARTMAILTO_QUEUE_CONNECTION=
@@ -36,6 +36,28 @@ SMARTMAILTO_ENABLED=true                 # false = el SDK no hace nada
 ```
 
 Por default **cada llamada se encola despues del commit** de la transaccion en curso: necesitas un worker de cola corriendo (`php artisan queue:work`). Con la cola `sync` la llamada se hace una sola vez al terminar el commit, sin reintentos; una falla dispara `SmartmailtoDeliveryFailed`. Para reintentos reales usa una cola de verdad (`database`, `redis`). Con `SMARTMAILTO_QUEUE=false` las llamadas son sincronas y lanzan `SmartmailtoException` si fallan.
+
+## Que se configura en Smartmailto y que en tu app
+
+Hay dos lados. **En Smartmailto** (panel → *Configuracion del proyecto*) se crean la API key y los secretos, y se configuran el remitente, las reglas de envio y las alertas del proyecto. **En tu app** van las variables de abajo, con estos nombres exactos. La pestaña *Conectar tu app* (`#conectar`) del panel trae la guia paso a paso con los mismos snippets.
+
+| Variable en tu app | De donde sale en Smartmailto | ¿Obligatoria? |
+|---|---|---|
+| `SMARTMAILTO_API_URL` | La URL del panel del ambiente, **sin `/api`** (el SDK lo agrega) | Si |
+| `SMARTMAILTO_API_TOKEN` | *Conectar tu app* → **Crear API key**. Se muestra completa una sola vez; si la pierdes, crea otra y revoca la vieja | Si |
+| `SMARTMAILTO_WEBHOOK_SECRET` | *Avisos y alertas* → webhook de falla: guardas la URL de tu app y se muestra el secreto `whsec_...` una sola vez ([Webhook de falla](#webhook-de-falla-f-008)) | Recomendado si mandas correos que no pueden perderse |
+| `SMARTMAILTO_PULL_SECRET` | *Avanzado* → *Sincronizacion desde tu app (pull)*: se muestra el secreto `pullsec_...` una sola vez ([Pull](#pull-smartmailto-le-pide-datos-a-tu-app-f-011)) | Solo con pull |
+
+Lo demas vive solo en Smartmailto y tu app no hace nada: remitente y su politica de `from`, Reply-To, tracking, horario, exclusiones y retencion. Las alertas del **outbox** son la excepcion: las manda tu app y se configuran en ella (`SMARTMAILTO_ALERTS_MAIL_TO`, `SMARTMAILTO_ALERTS_TEAMS_WEBHOOK_URL`), aparte de las alertas del proyecto que se configuran en el panel.
+
+**Ambientes:**
+
+| Ambiente | `SMARTMAILTO_API_URL` | Prefijo de las API keys nuevas |
+|---|---|---|
+| DEV | `https://smartmailto-dev.agv.dev` | `mf_dev_` |
+| Produccion | `https://smartmailto.com` (aun no desplegado) | `mf_live_` |
+
+El prefijo `mf_dev_` (DEV y local) o `mf_live_` (produccion) solo distingue a simple vista de que ambiente es una key: ni Smartmailto ni el SDK lo validan. Las keys que ya existen (incluidas las `mf_live_...` generadas en DEV) siguen sirviendo sin cambios. Una key solo funciona contra el ambiente donde se creo.
 
 ## Uso
 
@@ -241,7 +263,7 @@ Smartmailto::send('cfdi-por-correo', Identity::user($user->id, $user->email), [
     replyTo: ['email' => 'soporte@facturafacilita.com', 'name' => 'Soporte'],
 );
 
-// Recibo de compra con el PDF y otro remitente del mismo dominio.
+// Recibo de compra con el PDF y otro remitente que la politica del sender permite.
 Smartmailto::send('recibo-compra', Identity::user($user->id, $user->email), $data,
     idempotencyKey: "ff:recibo:{$order->id}", sendBefore: now()->addMinutes(10),
     attachments: [Attachment::fromData($pdf, 'Comprobante.pdf')],
@@ -257,8 +279,8 @@ Smartmailto::send('restablecer-contrasena', Identity::user($user->id, $user->ema
 - **Limites:** 10 archivos y **7 MB decodificados en total** por envio. El SDK los valida **antes de encolar** (lanza `InvalidArgumentException`); si el servidor tiene otros, ajusta `SMARTMAILTO_ATTACHMENTS_MAX_FILES` / `SMARTMAILTO_ATTACHMENTS_MAX_BYTES`. El servidor ademas revisa la firma del archivo (un `.pdf` debe ser PDF).
 - **Adjuntos y cola:** el contenido se lee al llamar `send()` y el job lleva el base64 (~1.37x el tamano de los archivos): no depende de que el archivo siga en disco cuando corre el worker. Consecuencias: (1) el payload del job puede pesar ~10 MB y queda **sin cifrar** en tu almacen de cola (`jobs` de la cola `database`, Redis); (2) **SQS no sirve** para envios con adjuntos (limite de 256 KB por mensaje): usa `database`/`redis` o `SMARTMAILTO_QUEUE=false` para esos envios. `Smartmailto::fake()` tambien guarda el base64.
 - **`to`, `cc`, `bcc`:** max 10 por lista; solo con plantillas `kind: transactional` (si no: 422 `recipients_require_transactional`). No crean contactos y la lista de supresion del proyecto les aplica.
-- **`replyTo` / `from`:** un correo o `['email' => ..., 'name' => ...]`. `from` solo del dominio del From del proyecto (422 `from_not_allowed`).
-- Contrato completo: `docs/api-envio-y-aprovisionamiento.md` del servidor (`notificabot-lara-mailflow`).
+- **`replyTo` / `from`:** un correo o `['email' => ..., 'name' => ...]`. El `from` lo autoriza la politica del remitente (sender) con el que sale el envio (F-014): `fijo`, `lista` de direcciones permitidas o `dominio`; fuera de ella, 422 `from_not_allowed`. Si el remitente no permite copias o Reply-To: 422 `cc_not_allowed`, `bcc_not_allowed` o `reply_to_not_allowed`. Sin `from`, sale con el del remitente.
+- Contrato completo: `docs/api-envio-y-aprovisionamiento.md` del servidor (`notificabot-lara-smartmailto`).
 
 ### Plantillas como codigo (aprovisionamiento, F-008 y F-009)
 
@@ -394,7 +416,7 @@ try {
 
 ### Webhook de falla (F-008)
 
-Cuando un envio aceptado vence (`send_before`) o falla, Smartmailto avisa por el webhook de falla del proyecto (panel → engrane → *Webhook de falla*). El secreto `whsec_...` se muestra una vez:
+Cuando un envio aceptado vence (`send_before`) o falla, Smartmailto avisa por el webhook de falla del proyecto (panel → *Configuracion del proyecto* → pestaña *Avisos y alertas*). El secreto `whsec_...` se muestra una vez:
 
 ```dotenv
 SMARTMAILTO_WEBHOOK_SECRET=whsec_...
@@ -495,7 +517,7 @@ class MiPullResolver implements PullResolver
 }
 ```
 
-**2. Configura.** El panel del proyecto (engrane → *Sincronizacion desde el proyecto*) muestra el secreto `pullsec_...` una sola vez y pide la URL de tu app: `https://tu-app/api/smartmailto/pull`.
+**2. Configura.** El panel (*Configuracion del proyecto* → pestaña *Avanzado* → *Sincronizacion desde tu app (pull)*) muestra el secreto `pullsec_...` una sola vez y pide la URL de tu app: `https://tu-app/api/smartmailto/pull`.
 
 ```dotenv
 SMARTMAILTO_PULL_ENABLED=true

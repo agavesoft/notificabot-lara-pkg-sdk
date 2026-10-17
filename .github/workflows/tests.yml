@@ -1,10 +1,18 @@
-# Gate del SDK: matriz Laravel 12/13 (11 ya no recibe parches de seguridad) en cada PR y push a develop/main.
+# Gate del SDK: matriz Laravel 12/13 (11 ya no recibe parches de seguridad).
+# Corre solo en PR a main (D-537: develop no tiene CI) y solo si el PR toca PHP
+# (enmienda de paths a D-537 del 2026-10-16).
 name: Tests
 
 on:
   pull_request:
-  push:
-    branches: [develop, main]
+    branches: [main]
+    paths:
+      - '**/*.php'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'phpunit.xml'
+      - '.env.testing'
+      - 'database/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

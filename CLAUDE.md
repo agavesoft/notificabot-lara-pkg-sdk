@@ -12,7 +12,7 @@ Paquete publico `agavesoft/smartmailto` (Packagist): SDK de Laravel 12-13 para l
 
 - `develop` (trabajo) y `main` (publicado). Ramas de trabajo → PR a `develop`.
 - Publicar: PR `develop → main` con merge commit y tag `vX.Y.Z` en `main`; Packagist se actualiza por webhook del repo.
-- Gate: `.github/workflows/tests.yml` (matriz Laravel 12/13 + pint).
+- Gate: `.github/workflows/tests.yml` (matriz Laravel 12/13 + pint). Corre solo en PR a `main` y solo si el PR toca PHP (`**/*.php`, `composer.json/lock`, `phpunit.xml`, `.env.testing`, `database/**`) — D-537 + enmienda de paths del 2026-10-16. `develop` no tiene CI: los PR a `develop` no reportan checks.
 - Sin ambientes desplegables: no aplica `/agave-ci` de dev/pro.
 
 ## Captura automatica de conocimiento
